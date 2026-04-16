@@ -19,6 +19,9 @@ import numpy as np
 from tqdm import tqdm
 from typing import List, Tuple, Dict, Optional
 
+import sys, os
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
 from amr_graph_parser import (
     parse_penman_to_graph,
     transform_to_spg,

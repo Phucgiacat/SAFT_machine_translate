@@ -17,9 +17,10 @@ Usage (Colab / script):
 
 HƯỚNG DẪN: Chạy trên Colab với L4 GPU.
   1. Upload thư mục SAFT lên Colab
-  2. pip install transformers peft accelerate sacrebleu unbabel-comet tqdm matplotlib
-  3. python saft_pe_precompute.py --data-dir data
-  4. python saft_train.py --track saft --data-dir data
+  2. pip install transformers peft accelerate sacrebleu tqdm matplotlib
+  3. (Optional) pip install pytorch-lightning==2.1.0 unbabel-comet==2.2.2
+  4. python saft_pe_precompute.py --data-dir data
+  5. python saft_train.py --track saft --data-dir data
 ═══════════════════════════════════════════════════════════
 """
 
@@ -34,7 +35,7 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from torch.cuda.amp import autocast, GradScaler
+from torch.amp import autocast, GradScaler
 import numpy as np
 import sacrebleu
 import matplotlib.pyplot as plt
@@ -42,6 +43,9 @@ from tqdm.auto import tqdm
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model, TaskType
+
+import sys, os as _os
+sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
 
 from saft_model import SAFTModel
 from saft_dataset import (
@@ -258,15 +262,21 @@ def evaluate_bleu(
 
 @torch.no_grad()
 def evaluate_comet(vi_texts, predictions, references, comet_model, n=None):
-    """Compute COMET score."""
+    """Compute COMET score. Returns None if comet_model is None."""
+    if comet_model is None:
+        return None
     if n is None:
         n = len(predictions)
-    data = [
-        {"src": src, "mt": mt, "ref": ref}
-        for src, mt, ref in zip(vi_texts[:n], predictions[:n], references[:n])
-    ]
-    output = comet_model.predict(data, batch_size=64, gpus=1)
-    return output.system_score
+    try:
+        data = [
+            {"src": src, "mt": mt, "ref": ref}
+            for src, mt, ref in zip(vi_texts[:n], predictions[:n], references[:n])
+        ]
+        output = comet_model.predict(data, batch_size=64, gpus=1)
+        return output.system_score
+    except Exception as e:
+        print(f"  [WARN] COMET evaluation failed: {e}")
+        return None
 
 
 # ═══════════════════════════════════════════════════════════
@@ -358,7 +368,7 @@ def train_track(
                 amr_intra_pos = batch['amr_intra_pos'].to(device)
                 amr_mask = batch['amr_mask'].to(device)
 
-                with autocast(dtype=amp_dtype):
+                with autocast(device_type='cuda', dtype=amp_dtype):
                     outputs = saft_model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -369,7 +379,7 @@ def train_track(
                     )
             else:
                 # Baseline: standard forward (no PE)
-                with autocast(dtype=amp_dtype):
+                with autocast(device_type='cuda', dtype=amp_dtype):
                     outputs = saft_model(
                         input_ids=input_ids,
                         attention_mask=attention_mask,
@@ -413,15 +423,23 @@ def train_track(
         comet_score = evaluate_comet(val_vi, preds, refs, comet_model, n=len(preds))
 
         bleu_history.append(bleu_score)
-        comet_history.append(comet_score)
+        comet_history.append(comet_score if comet_score is not None else 0.0)
 
         print(f"  Loss  = {avg_epoch_loss:.4f}")
         print(f"  BLEU  = {bleu_score:.2f}  (best: {best_bleu:.2f})")
-        print(f"  COMET = {comet_score:.4f} (best: {best_comet:.4f})")
+        if comet_score is not None:
+            print(f"  COMET = {comet_score:.4f} (best: {best_comet:.4f})")
+        else:
+            print(f"  COMET = N/A (unbabel-comet not installed, using BLEU for early stopping)")
 
-        # Early stopping on COMET
-        if comet_score > best_comet:
-            best_comet = comet_score
+        # Early stopping: prefer COMET, fallback to BLEU
+        current_metric = comet_score if comet_score is not None else bleu_score
+        best_metric = best_comet if comet_score is not None else best_bleu
+        metric_name = "COMET" if comet_score is not None else "BLEU"
+
+        if current_metric > best_metric:
+            if comet_score is not None:
+                best_comet = comet_score
             best_bleu = max(best_bleu, bleu_score)
             patience_counter = 0
             best_epoch = epoch
@@ -433,7 +451,7 @@ def train_track(
             tokenizer.save_pretrained(best_path)
             if use_saft:
                 saft_model.save_pe_projection(os.path.join(best_path, "pe_projection.pt"))
-            print(f"  ✓ New best! Saved → {best_path}")
+            print(f"  ✓ New best ({metric_name})! Saved → {best_path}")
         else:
             patience_counter += 1
             best_bleu = max(best_bleu, bleu_score)
@@ -491,6 +509,8 @@ def evaluate_on_test(
     )
 
     comet_score = evaluate_comet(test_vi, preds, refs, comet_model)
+    if comet_score is None:
+        comet_score = 0.0
 
     config.eval_samples = orig_samples
 
@@ -527,12 +547,20 @@ def main():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
         print(f"VRAM: {torch.cuda.get_device_properties(0).total_mem / 1e9:.1f} GB")
 
-    # Load COMET model
-    print("\nLoading COMET model...")
-    from comet import download_model, load_from_checkpoint
-    comet_path = download_model("Unbabel/wmt22-comet-da")
-    comet_model = load_from_checkpoint(comet_path)
-    print("COMET loaded: Unbabel/wmt22-comet-da")
+    # Load COMET model (optional)
+    comet_model = None
+    try:
+        from comet import download_model, load_from_checkpoint
+        print("\nLoading COMET model...")
+        comet_path = download_model("Unbabel/wmt22-comet-da")
+        comet_model = load_from_checkpoint(comet_path)
+        print("COMET loaded: Unbabel/wmt22-comet-da")
+    except ImportError:
+        print("\n[INFO] unbabel-comet not installed. Using BLEU-only for evaluation.")
+        print("  To enable COMET: pip install pytorch-lightning==2.1.0 unbabel-comet==2.2.2")
+    except Exception as e:
+        print(f"\n[WARN] Failed to load COMET: {e}")
+        print("  Continuing with BLEU-only evaluation.")
 
     # Load text data
     print("\nLoading text data...")
