@@ -86,9 +86,9 @@ class Config:
     # Batch
     baseline_max_seq = 768
     saft_max_seq = 1280
-    baseline_batch_size = 8
-    saft_batch_size = 4
-    gradient_accumulation = 8
+    baseline_batch_size = 32      # T4 + 0.5B: plenty of VRAM
+    saft_batch_size = 16          # SAFT sequences are longer
+    gradient_accumulation = 2     # effective: 64 (baseline), 32 (saft)
 
     # Evaluation
     num_beams = 4
