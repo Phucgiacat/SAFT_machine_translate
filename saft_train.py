@@ -87,9 +87,9 @@ class Config:
     # Batch — A100 + 0.5B model
     baseline_max_seq = 768
     saft_max_seq = 1280
-    baseline_batch_size = 64
-    saft_batch_size = 64
-    gradient_accumulation = 2     # effective = 128
+    baseline_batch_size = 8
+    saft_batch_size = 4
+    gradient_accumulation = 8     # effective = 128
 
     # Evaluation
     num_beams = 4
