@@ -1,11 +1,12 @@
 """
-SAFT Dataset — Node-to-Token Alignment
+SAFT Dataset — Node-to-Token Alignment (BFS Linearization)
 ═════════════════════════════════════════════════════════
 Custom PyTorch Dataset that:
-1. Loads precomputed node-level PEs
+1. Loads precomputed node-level PEs from BFS-linearized AMR
 2. Builds prompts with AMR + Vietnamese + English
-3. Aligns AMR labels to token positions
+3. Aligns AMR labels to token positions (bijective: label i ↔ node i)
 4. Returns per-token PE vectors for embedding injection
+5. ALL labels get PE (concept + role + <stop> + <P>)
 
 Supports both SAFT (with PEs) and Baseline (without AMR) modes.
 ═════════════════════════════════════════════════════════
@@ -55,7 +56,6 @@ def tokenize_with_amr_alignment(
     user_before_amr: str,
     amr_labels: List[str],
     label_pes: np.ndarray,       # (n_labels, 2k)
-    label_is_concept: List[bool],
     user_after_amr: str,
     en_text: str,
     max_seq_length: int = 1280,
@@ -63,6 +63,7 @@ def tokenize_with_amr_alignment(
 ) -> Dict:
     """
     Tokenize the full prompt with per-label AMR alignment.
+    All AMR labels get PE (bijective alignment from paper).
 
     Returns dict with:
         input_ids, attention_mask, labels,
@@ -81,7 +82,7 @@ def tokenize_with_amr_alignment(
     amr_token_ids = []
     amr_token_pe = []       # per-token PE vectors
     amr_token_intra = []    # per-token intra-node positions
-    amr_token_mask = []     # per-token concept mask
+    amr_token_mask = []     # per-token AMR mask (1.0 for ALL labels)
 
     for label_idx, label in enumerate(amr_labels):
         # Add space separator between labels (except first)
@@ -91,14 +92,14 @@ def tokenize_with_amr_alignment(
             sep_ids = tokenizer.encode(label, add_special_tokens=False)
         n_tokens = len(sep_ids)
 
-        is_concept = label_is_concept[label_idx]
-        pe = label_pes[label_idx] if is_concept else np.zeros(pe_dim, dtype=np.float32)
+        # All labels get PE (paper: bijective alignment)
+        pe = label_pes[label_idx]
 
         for j, tid in enumerate(sep_ids):
             amr_token_ids.append(tid)
             amr_token_pe.append(pe)
             amr_token_intra.append(j)  # intra-node position
-            amr_token_mask.append(1.0 if is_concept else 0.0)
+            amr_token_mask.append(1.0)  # ALL AMR labels get mask=1.0
 
     # Combine all parts
     all_ids = prefix_ids + amr_token_ids + suffix_ids + response_ids
@@ -193,14 +194,14 @@ def tokenize_baseline(
 class SAFTDataset(Dataset):
     """
     Dataset for SAFT training with AMR PE injection.
-    Loads precomputed PEs and builds aligned prompts.
+    Uses BFS-linearized AMR with bijective PE alignment.
     """
 
     def __init__(
         self,
         vi_file: str,
         en_file: str,
-        bpe_amr_file: str,
+        linear_amr_file: str,
         pe_file: str,
         tokenizer,
         max_seq_length: int = 1280,
@@ -215,7 +216,7 @@ class SAFTDataset(Dataset):
             self.vi_texts = [l.strip() for l in f]
         with open(en_file, 'r', encoding='utf-8') as f:
             self.en_texts = [l.strip() for l in f]
-        with open(bpe_amr_file, 'r', encoding='utf-8') as f:
+        with open(linear_amr_file, 'r', encoding='utf-8') as f:
             self.amr_texts = [l.strip() for l in f]
 
         # Load precomputed PEs
@@ -229,7 +230,7 @@ class SAFTDataset(Dataset):
         self.amr_texts = self.amr_texts[:n]
         self.pe_data = self.pe_data[:n]
 
-        print(f"  SAFTDataset: {n} samples, pe_dim={self.pe_dim}")
+        print(f"  SAFTDataset (BFS): {n} samples, pe_dim={self.pe_dim}")
 
     def __len__(self):
         return len(self.vi_texts)
@@ -237,12 +238,10 @@ class SAFTDataset(Dataset):
     def __getitem__(self, idx):
         vi = self.vi_texts[idx]
         en = self.en_texts[idx]
-        amr = self.amr_texts[idx]
         pe_info = self.pe_data[idx]
 
         labels_list = pe_info['labels']
         label_pes = pe_info['label_pes']
-        label_is_concept = pe_info['label_is_concept']
 
         result = tokenize_with_amr_alignment(
             tokenizer=self.tokenizer,
@@ -250,7 +249,6 @@ class SAFTDataset(Dataset):
             user_before_amr="AMR Graph:\n",
             amr_labels=labels_list,
             label_pes=label_pes,
-            label_is_concept=label_is_concept,
             user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
             en_text=en,
             max_seq_length=self.max_seq_length,

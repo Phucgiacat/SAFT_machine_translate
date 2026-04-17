@@ -1,9 +1,9 @@
 """
-SAFT Training Pipeline — Full Embedding-Level PE Injection
+SAFT Training Pipeline — Full Embedding-Level PE Injection (BFS)
 ═══════════════════════════════════════════════════════════
 2-Track Training:
   Track 1: Baseline     — Vietnamese → English (no AMR)
-  Track 2: SAFT (Full)  — Vietnamese + AMR w/ embedding PE → English
+  Track 2: SAFT (Full)  — Vietnamese + BFS-linearized AMR w/ embedding PE → English
 
 Implements SAFT paper (arXiv:2507.13381) with:
   - Magnetic Laplacian PEs projected via trainable 2-layer MLP
@@ -19,8 +19,9 @@ HƯỚNG DẪN: Chạy trên Colab với L4 GPU.
   1. Upload thư mục SAFT lên Colab
   2. pip install transformers peft accelerate sacrebleu tqdm matplotlib
   3. (Optional) pip install pytorch-lightning==2.1.0 unbabel-comet==2.2.2
-  4. python saft_pe_precompute.py --data-dir data
-  5. python saft_train.py --track saft --data-dir data
+  4. python saft_bfs_linearize.py --data-dir data
+  5. python saft_pe_precompute.py --data-dir data
+  6. python saft_train.py --track saft --data-dir data
 ═══════════════════════════════════════════════════════════
 """
 
@@ -83,12 +84,12 @@ class Config:
     num_epochs = 10
     early_stop_patience = 2
 
-    # Batch
+    # Batch — A100 + 0.5B model
     baseline_max_seq = 768
     saft_max_seq = 1280
-    baseline_batch_size = 32      # T4 + 0.5B: plenty of VRAM
-    saft_batch_size = 16          # SAFT sequences are longer
-    gradient_accumulation = 2     # effective: 64 (baseline), 32 (saft)
+    baseline_batch_size = 64
+    saft_batch_size = 64
+    gradient_accumulation = 2     # effective = 128
 
     # Evaluation
     num_beams = 4
@@ -570,13 +571,13 @@ def main():
 
     train_vi = read_lines(os.path.join(config.data_dir, "train.vi"))
     train_en = read_lines(os.path.join(config.data_dir, "train.en"))
-    train_amr = read_lines(os.path.join(config.data_dir, "train.bpe.amr"))
+    train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
     val_vi = read_lines(os.path.join(config.data_dir, "tst2012.vi"))
     val_en = read_lines(os.path.join(config.data_dir, "tst2012.en"))
-    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.bpe.amr"))
+    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
     test_vi = read_lines(os.path.join(config.data_dir, "tst2013.vi"))
     test_en = read_lines(os.path.join(config.data_dir, "tst2013.en"))
-    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.bpe.amr"))
+    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
     print(f"  Train: {len(train_vi):,} | Val: {len(val_vi):,} | Test: {len(test_vi):,}")
 
     # Load precomputed PEs (for SAFT track)
@@ -670,7 +671,7 @@ def main():
         train_ds = SAFTDataset(
             os.path.join(config.data_dir, "train.vi"),
             os.path.join(config.data_dir, "train.en"),
-            os.path.join(config.data_dir, "train.bpe.amr"),
+            os.path.join(config.data_dir, "train.linear.amr"),
             os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer, config.saft_max_seq, config.k_eigenvectors,
         )

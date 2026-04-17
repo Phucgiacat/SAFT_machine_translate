@@ -1,16 +1,16 @@
 """
-Evaluate a saved model on test set (BLEU + COMET).
+Evaluate a saved model on test set, or translate single sentences.
 
 Usage:
-    python saft_eval.py \
-        --model-path outputs/baseline/best_model \
-        --data-dir ../data \
-        --mode baseline
+    # Eval on test set
+    python saft_eval.py --model-path outputs/baseline/best_model --data-dir ../data --mode baseline
 
-    python saft_eval.py \
-        --model-path outputs/saft/best_model \
-        --data-dir ../data \
-        --mode saft
+    # Translate a single sentence
+    python saft_eval.py --model-path outputs/baseline/best_model --mode baseline \
+        --translate "Tôi muốn cho bạn biết về nỗ lực khoa học to lớn."
+
+    # Interactive mode (type sentences, Ctrl+C to exit)
+    python saft_eval.py --model-path outputs/saft/best_model --mode saft --interactive
 """
 
 import os
@@ -90,8 +90,84 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
     return predictions
 
 
+@torch.no_grad()
+def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
+                     num_beams=4, max_new_tokens=256):
+    """Translate a single Vietnamese sentence to English."""
+    model.eval()
+    device = next(model.parameters()).device
+
+    if mode == "saft" and amr_text:
+        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
+                  f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
+                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+                  f"<|im_start|>assistant\n")
+    else:
+        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
+                  f"<|im_start|>user\n"
+                  f"Translate the source text from Vietnamese to English.\n"
+                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+                  f"<|im_start|>assistant\n")
+
+    inputs = tokenizer(prompt, return_tensors="pt").to(device)
+    outputs = model.generate(
+        **inputs,
+        max_new_tokens=max_new_tokens,
+        num_beams=num_beams,
+        do_sample=False,
+        pad_token_id=tokenizer.eos_token_id,
+    )
+    input_len = inputs.input_ids.shape[-1]
+    return tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
+
+
+def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
+    """Interactive translation loop."""
+    print(f"\n{'='*50}")
+    print(f"  Interactive Translation (mode={mode})")
+    print(f"  Type Vietnamese text, press Enter to translate.")
+    print(f"  Type 'quit' or Ctrl+C to exit.")
+    print(f"{'='*50}\n")
+
+    while True:
+        try:
+            vi_text = input("🇻🇳 Vietnamese: ").strip()
+            if not vi_text or vi_text.lower() in ('quit', 'exit', 'q'):
+                print("Bye!")
+                break
+
+            amr_text = None
+            if mode == "saft":
+                amr_input = input("📊 AMR (paste or press Enter to skip): ").strip()
+                if amr_input:
+                    amr_text = amr_input
+
+            translation = translate_single(model, tokenizer, vi_text, amr_text,
+                                           mode, num_beams, max_new_tokens)
+            print(f"🇬🇧 English:    {translation}\n")
+
+        except KeyboardInterrupt:
+            print("\nBye!")
+            break
+        except Exception as e:
+            print(f"Error: {e}\n")
+
+
+def load_model(model_path):
+    """Load model and tokenizer from saved path."""
+    print(f"\nLoading model from: {model_path}")
+    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    model = AutoModelForCausalLM.from_pretrained(
+        model_path, torch_dtype=dtype, device_map="auto", trust_remote_code=True)
+    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    if tokenizer.pad_token is None:
+        tokenizer.pad_token = tokenizer.eos_token
+    print(f"  Loaded: {model.config.hidden_size}d, {dtype}")
+    return model, tokenizer
+
+
 def main():
-    parser = argparse.ArgumentParser(description='Evaluate saved model on test set')
+    parser = argparse.ArgumentParser(description='Evaluate or translate with saved model')
     parser.add_argument('--model-path', required=True, help='Path to saved best_model')
     parser.add_argument('--data-dir', default='../data', help='Data directory')
     parser.add_argument('--mode', choices=['baseline', 'saft'], default='baseline')
@@ -99,6 +175,12 @@ def main():
     parser.add_argument('--num-beams', type=int, default=4)
     parser.add_argument('--max-new-tokens', type=int, default=256)
     parser.add_argument('--split', default='tst2013', help='Test split name')
+    parser.add_argument('--translate', type=str, default=None,
+                        help='Translate a single Vietnamese sentence')
+    parser.add_argument('--amr', type=str, default=None,
+                        help='AMR text for --translate (SAFT mode)')
+    parser.add_argument('--interactive', action='store_true',
+                        help='Start interactive translation mode')
     args = parser.parse_args()
 
     print(f"PyTorch: {torch.__version__}")
@@ -106,21 +188,23 @@ def main():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
 
     # ── Load model ──
-    print(f"\nLoading model from: {args.model_path}")
-    dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
+    model, tokenizer = load_model(args.model_path)
 
-    model = AutoModelForCausalLM.from_pretrained(
-        args.model_path,
-        torch_dtype=dtype,
-        device_map="auto",
-        trust_remote_code=True,
-    )
-    tokenizer = AutoTokenizer.from_pretrained(args.model_path, trust_remote_code=True)
-    if tokenizer.pad_token is None:
-        tokenizer.pad_token = tokenizer.eos_token
-    print(f"  Model loaded: {model.config.hidden_size}d, {dtype}")
+    # ── Single sentence translation ──
+    if args.translate:
+        result = translate_single(model, tokenizer, args.translate, args.amr,
+                                   args.mode, args.num_beams, args.max_new_tokens)
+        print(f"\n🇻🇳 Vietnamese: {args.translate}")
+        if args.amr: print(f"📊 AMR:        {args.amr}")
+        print(f"🇬🇧 English:    {result}")
+        return
 
-    # ── Load test data ──
+    # ── Interactive mode ──
+    if args.interactive:
+        interactive_loop(model, tokenizer, args.mode, args.num_beams, args.max_new_tokens)
+        return
+
+    # ── Test set evaluation ──
     test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))
     test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))
     test_amr = None
