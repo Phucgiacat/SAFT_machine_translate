@@ -208,7 +208,10 @@ def main():
     test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))
     test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))
     test_amr = None
-    amr_path = os.path.join(args.data_dir, f"{args.split}.bpe.amr")
+    amr_path = os.path.join(args.data_dir, f"{args.split}.linear.amr")
+    if not os.path.exists(amr_path):
+        # Fallback to old format
+        amr_path = os.path.join(args.data_dir, f"{args.split}.bpe.amr")
     if os.path.exists(amr_path):
         test_amr = read_lines(amr_path)
     print(f"  Test samples: {len(test_vi)} ({args.split})")
