@@ -62,7 +62,7 @@ from saft_dataset import (
 
 class Config:
     # Model
-    model_name = "Qwen/Qwen2.5-0.5B-Instruct"
+    model_name = "Qwen/Qwen3-1.7B"
     dtype = "bf16"  # bf16 or fp16
 
     # SAFT
