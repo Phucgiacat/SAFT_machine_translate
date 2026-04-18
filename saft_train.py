@@ -99,7 +99,7 @@ class Config:
 
     # Paths
     data_dir = "data"
-    output_dir = "outputs"
+    output_dir = "/content/drive/MyDrive/output_Qwen3-1.7B"
 
 
 # ═══════════════════════════════════════════════════════════
