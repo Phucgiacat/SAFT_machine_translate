@@ -84,13 +84,15 @@ def tokenize_with_amr_alignment(
     amr_token_intra = []    # per-token intra-node positions
     amr_token_mask = []     # per-token AMR mask (1.0 for ALL labels)
 
+    label_boundaries = []  # Track where each label's tokens start (for clean truncation)
+
     for label_idx, label in enumerate(amr_labels):
+        label_boundaries.append(len(amr_token_ids))
         # Add space separator between labels (except first)
         if label_idx > 0:
             sep_ids = tokenizer.encode(" " + label, add_special_tokens=False)
         else:
             sep_ids = tokenizer.encode(label, add_special_tokens=False)
-        n_tokens = len(sep_ids)
 
         # All labels get PE (paper: bijective alignment)
         pe = label_pes[label_idx]
@@ -104,21 +106,48 @@ def tokenize_with_amr_alignment(
     # Combine all parts
     all_ids = prefix_ids + amr_token_ids + suffix_ids + response_ids
 
-    # Truncate if needed
+    # ── Smart truncation: priority = prefix+suffix (fixed) > response > AMR ──
     if len(all_ids) > max_seq_length:
-        # Truncate AMR tokens (keep prefix, suffix, response)
-        max_amr_tokens = max_seq_length - len(prefix_ids) - len(suffix_ids) - len(response_ids)
-        if max_amr_tokens < 10:
-            # Can't fit, truncate response
-            max_amr_tokens = max_seq_length // 2
-            response_ids = response_ids[:max_seq_length - len(prefix_ids) - max_amr_tokens - len(suffix_ids)]
+        fixed_overhead = len(prefix_ids) + len(suffix_ids)
+        budget = max_seq_length - fixed_overhead
 
-        amr_token_ids = amr_token_ids[:max_amr_tokens]
-        amr_token_pe = amr_token_pe[:max_amr_tokens]
-        amr_token_intra = amr_token_intra[:max_amr_tokens]
-        amr_token_mask = amr_token_mask[:max_amr_tokens]
-        all_ids = prefix_ids + amr_token_ids + suffix_ids + response_ids
+        if budget < 20:
+            # Edge case: structural tokens alone nearly fill the limit
+            all_ids = all_ids[:max_seq_length]
+        else:
+            amr_len = len(amr_token_ids)
+            resp_len = len(response_ids)
 
+            if resp_len <= budget - 10:
+                # Common case: keep full response, truncate AMR only
+                amr_budget = budget - resp_len
+            else:
+                # Both need cutting: 30% to response (min 20), rest to AMR
+                resp_budget = max(budget * 3 // 10, min(20, budget))
+                amr_budget = budget - resp_budget
+                response_ids = response_ids[:resp_budget]
+
+            # Truncate AMR at label boundary (avoid cutting mid-label)
+            if amr_budget <= 0:
+                amr_token_ids, amr_token_pe = [], []
+                amr_token_intra, amr_token_mask = [], []
+            elif amr_budget < amr_len:
+                cut_at = 0
+                for lb in label_boundaries:
+                    if lb <= amr_budget:
+                        cut_at = lb
+                    else:
+                        break
+                if cut_at == 0:
+                    cut_at = amr_budget  # fallback: hard cut
+                amr_token_ids = amr_token_ids[:cut_at]
+                amr_token_pe = amr_token_pe[:cut_at]
+                amr_token_intra = amr_token_intra[:cut_at]
+                amr_token_mask = amr_token_mask[:cut_at]
+
+            all_ids = prefix_ids + amr_token_ids + suffix_ids + response_ids
+
+    # Final safety truncation (should not trigger with correct logic above)
     if len(all_ids) > max_seq_length:
         all_ids = all_ids[:max_seq_length]
 
@@ -163,14 +192,34 @@ def tokenize_baseline(
     """Tokenize baseline prompt (no AMR, no PE)."""
     system, user_content, assistant = build_baseline_prompt_parts(vi_text, en_text)
 
-    prompt = (
+    # Tokenize in parts for smart truncation (avoid cutting structural tokens)
+    struct_prefix = (
         f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n{user_content}<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"<|im_start|>user\n"
+        f"Translate the source text from Vietnamese to English.\n"
+        f"Vietnamese: "
     )
-    prompt_ids = tokenizer.encode(prompt, add_special_tokens=False)
+    struct_suffix = f"\nEnglish:<|im_end|>\n<|im_start|>assistant\n"
+
+    prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
+    vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
+    suffix_ids = tokenizer.encode(struct_suffix, add_special_tokens=False)
     response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
 
+    fixed_overhead = len(prefix_ids) + len(suffix_ids)
+    budget = max_seq_length - fixed_overhead
+
+    if len(vi_ids) + len(response_ids) > budget:
+        if len(response_ids) <= budget - 10:
+            # Keep full response, truncate Vietnamese
+            vi_ids = vi_ids[:budget - len(response_ids)]
+        else:
+            # Both need cutting: prioritize response (70%)
+            resp_budget = max(budget * 7 // 10, min(20, budget))
+            vi_ids = vi_ids[:budget - resp_budget]
+            response_ids = response_ids[:resp_budget]
+
+    prompt_ids = prefix_ids + vi_ids + suffix_ids
     all_ids = prompt_ids + response_ids
     if len(all_ids) > max_seq_length:
         all_ids = all_ids[:max_seq_length]
@@ -188,13 +237,91 @@ def tokenize_baseline(
 
 
 # ─────────────────────────────────────────────────────────
-# 3. Datasets
+# 3. AMR Chunking (split at <stop> boundaries, no info loss)
+# ─────────────────────────────────────────────────────────
+
+def chunk_amr_at_stop_boundaries(
+    labels: List[str],
+    label_pes: np.ndarray,
+    max_labels_per_chunk: int,
+    max_chunks: int = 3,
+) -> List[Tuple[List[str], np.ndarray]]:
+    """
+    Split AMR labels into chunks at <stop> boundaries (BFS segment boundaries).
+    Preserves complete BFS segments within each chunk — no information loss.
+
+    Each BFS segment ends with <stop>, representing one node's expansion.
+    Segments are greedily grouped to fit within max_labels_per_chunk.
+
+    Args:
+        labels: BFS-linearized AMR labels
+        label_pes: Per-label PE vectors (n_labels, pe_dim)
+        max_labels_per_chunk: Max labels per chunk (estimated from token budget)
+        max_chunks: Cap on number of chunks (excess merges into last chunk)
+
+    Returns:
+        List of (labels_chunk, pes_chunk) tuples
+    """
+    if len(labels) <= max_labels_per_chunk:
+        return [(labels, label_pes)]
+
+    # Find segment boundaries (position after each <stop>)
+    boundaries = [0]
+    for i, label in enumerate(labels):
+        if label == '<stop>':
+            boundaries.append(i + 1)
+    if boundaries[-1] < len(labels):
+        boundaries.append(len(labels))
+
+    # Greedily merge consecutive segments into chunks that fit
+    chunks = []
+    chunk_start_idx = 0  # index into boundaries list
+
+    for i in range(1, len(boundaries)):
+        current_size = boundaries[i] - boundaries[chunk_start_idx]
+
+        if current_size > max_labels_per_chunk and i - 1 > chunk_start_idx:
+            # Adding this segment would exceed limit → flush accumulated segments
+            start = boundaries[chunk_start_idx]
+            end = boundaries[i - 1]
+            chunks.append((labels[start:end], label_pes[start:end]))
+            chunk_start_idx = i - 1
+
+    # Add remaining labels as last chunk
+    if chunk_start_idx < len(boundaries) - 1:
+        start = boundaries[chunk_start_idx]
+        end = boundaries[-1]
+        chunks.append((labels[start:end], label_pes[start:end]))
+
+    if not chunks:
+        return [(labels, label_pes)]
+
+    # Cap at max_chunks (merge excess into last chunk)
+    if len(chunks) > max_chunks:
+        merged_labels = []
+        merged_pes_list = []
+        for c_labels, c_pes in chunks[max_chunks - 1:]:
+            merged_labels.extend(c_labels)
+            merged_pes_list.append(c_pes)
+        chunks = chunks[:max_chunks - 1]
+        chunks.append((merged_labels, np.concatenate(merged_pes_list, axis=0)))
+
+    return chunks
+
+
+# ─────────────────────────────────────────────────────────
+# 4. Datasets
 # ─────────────────────────────────────────────────────────
 
 class SAFTDataset(Dataset):
     """
     Dataset for SAFT training with AMR PE injection.
     Uses BFS-linearized AMR with bijective PE alignment.
+
+    Supports chunking: when AMR is too long to fit in max_seq_length,
+    it is split at <stop> boundaries into multiple training samples.
+    Each chunk gets partial AMR (with correct PEs) + full Vietnamese + full English.
+    No information is lost — all AMR content is covered across chunks.
     """
 
     def __init__(
@@ -206,10 +333,12 @@ class SAFTDataset(Dataset):
         tokenizer,
         max_seq_length: int = 1280,
         k_eigenvectors: int = 20,
+        max_chunks: int = 3,
     ):
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self.pe_dim = 2 * k_eigenvectors
+        self.max_chunks = max_chunks
 
         # Load text data
         with open(vi_file, 'r', encoding='utf-8') as f:
@@ -230,7 +359,22 @@ class SAFTDataset(Dataset):
         self.amr_texts = self.amr_texts[:n]
         self.pe_data = self.pe_data[:n]
 
-        print(f"  SAFTDataset (BFS): {n} samples, pe_dim={self.pe_dim}")
+        # Pre-compute response token lengths for chunking decisions
+        self._response_lens = [
+            len(tokenizer.encode(en, add_special_tokens=False))
+            for en in self.en_texts
+        ]
+
+        # Estimate fixed overhead (system + user structure + suffix + closing)
+        overhead_text = (
+            f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
+            f"<|im_start|>user\nAMR Graph:\n\n\n"
+            f"Vietnamese: \nEnglish:<|im_end|>\n"
+            f"<|im_start|>assistant\n<|im_end|>"
+        )
+        self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
+
+        print(f"  SAFTDataset (BFS): {n} samples, pe_dim={self.pe_dim}, max_chunks={max_chunks}")
 
     def __len__(self):
         return len(self.vi_texts)
@@ -243,18 +387,53 @@ class SAFTDataset(Dataset):
         labels_list = pe_info['labels']
         label_pes = pe_info['label_pes']
 
-        result = tokenize_with_amr_alignment(
-            tokenizer=self.tokenizer,
-            system_msg=SYSTEM_MSG_SAFT,
-            user_before_amr="AMR Graph:\n",
-            amr_labels=labels_list,
-            label_pes=label_pes,
-            user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
-            en_text=en,
-            max_seq_length=self.max_seq_length,
-            pe_dim=self.pe_dim,
+        # Estimate total tokens to decide if chunking is needed
+        vi_token_len = len(self.tokenizer.encode(vi, add_special_tokens=False))
+        resp_len = self._response_lens[idx]
+        estimated_amr = len(labels_list) * 2  # rough: ~2 tokens per label
+        estimated_total = self._fixed_overhead + vi_token_len + resp_len + estimated_amr
+
+        if estimated_total <= self.max_seq_length:
+            # Fits in one sample — no chunking needed
+            result = tokenize_with_amr_alignment(
+                tokenizer=self.tokenizer,
+                system_msg=SYSTEM_MSG_SAFT,
+                user_before_amr="AMR Graph:\n",
+                amr_labels=labels_list,
+                label_pes=label_pes,
+                user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
+                en_text=en,
+                max_seq_length=self.max_seq_length,
+                pe_dim=self.pe_dim,
+            )
+            return [result]
+
+        # ── Chunking: split AMR at <stop> boundaries ──
+        non_amr_tokens = self._fixed_overhead + vi_token_len + resp_len
+        amr_label_budget = max(5, (self.max_seq_length - non_amr_tokens) // 2)
+
+        chunks = chunk_amr_at_stop_boundaries(
+            labels_list, label_pes,
+            max_labels_per_chunk=amr_label_budget,
+            max_chunks=self.max_chunks,
         )
-        return result
+
+        results = []
+        for chunk_labels, chunk_pes in chunks:
+            result = tokenize_with_amr_alignment(
+                tokenizer=self.tokenizer,
+                system_msg=SYSTEM_MSG_SAFT,
+                user_before_amr="AMR Graph:\n",
+                amr_labels=list(chunk_labels),
+                label_pes=chunk_pes,
+                user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
+                en_text=en,
+                max_seq_length=self.max_seq_length,
+                pe_dim=self.pe_dim,
+            )
+            results.append(result)
+
+        return results
 
 
 class BaselineDataset(Dataset):
@@ -285,20 +464,35 @@ class BaselineDataset(Dataset):
         return len(self.vi_texts)
 
     def __getitem__(self, idx):
-        return tokenize_baseline(
+        result = tokenize_baseline(
             self.tokenizer, self.vi_texts[idx], self.en_texts[idx],
             self.max_seq_length,
         )
+        return [result]
 
 
 # ─────────────────────────────────────────────────────────
-# 4. Collate functions
+# 5. Collate functions (support chunked samples)
 # ─────────────────────────────────────────────────────────
 
-def saft_collate_fn(batch: List[Dict], pad_token_id: int = 0, pe_dim: int = 40) -> Dict:
-    """Collate SAFT samples with padding."""
-    max_len = max(b['input_ids'].size(0) for b in batch)
-    bs = len(batch)
+def _flatten_batch(batch: List) -> List[Dict]:
+    """Flatten a batch of lists-of-dicts into a single list of dicts.
+    Handles both chunked samples (list of dicts) and single dicts."""
+    flat = []
+    for item in batch:
+        if isinstance(item, list):
+            flat.extend(item)
+        else:
+            flat.append(item)
+    return flat
+
+
+def saft_collate_fn(batch: List, pad_token_id: int = 0, pe_dim: int = 40) -> Dict:
+    """Collate SAFT samples with padding. Handles chunked samples (list of lists)."""
+    flat_batch = _flatten_batch(batch)
+
+    max_len = max(b['input_ids'].size(0) for b in flat_batch)
+    bs = len(flat_batch)
 
     input_ids = torch.full((bs, max_len), pad_token_id, dtype=torch.long)
     attention_mask = torch.zeros(bs, max_len, dtype=torch.long)
@@ -307,7 +501,7 @@ def saft_collate_fn(batch: List[Dict], pad_token_id: int = 0, pe_dim: int = 40) 
     amr_intra_pos = torch.zeros(bs, max_len, dtype=torch.long)
     amr_mask = torch.zeros(bs, max_len, dtype=torch.float32)
 
-    for i, b in enumerate(batch):
+    for i, b in enumerate(flat_batch):
         seq_len = b['input_ids'].size(0)
         input_ids[i, :seq_len] = b['input_ids']
         attention_mask[i, :seq_len] = b['attention_mask']
@@ -326,16 +520,18 @@ def saft_collate_fn(batch: List[Dict], pad_token_id: int = 0, pe_dim: int = 40) 
     }
 
 
-def baseline_collate_fn(batch: List[Dict], pad_token_id: int = 0) -> Dict:
-    """Collate Baseline samples with padding."""
-    max_len = max(b['input_ids'].size(0) for b in batch)
-    bs = len(batch)
+def baseline_collate_fn(batch: List, pad_token_id: int = 0) -> Dict:
+    """Collate Baseline samples with padding. Handles list format."""
+    flat_batch = _flatten_batch(batch)
+
+    max_len = max(b['input_ids'].size(0) for b in flat_batch)
+    bs = len(flat_batch)
 
     input_ids = torch.full((bs, max_len), pad_token_id, dtype=torch.long)
     attention_mask = torch.zeros(bs, max_len, dtype=torch.long)
     labels = torch.full((bs, max_len), -100, dtype=torch.long)
 
-    for i, b in enumerate(batch):
+    for i, b in enumerate(flat_batch):
         seq_len = b['input_ids'].size(0)
         input_ids[i, :seq_len] = b['input_ids']
         attention_mask[i, :seq_len] = b['attention_mask']

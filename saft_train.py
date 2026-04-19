@@ -90,6 +90,7 @@ class Config:
     baseline_batch_size = 8
     saft_batch_size = 4
     gradient_accumulation = 8     # effective = 128
+    max_chunks = 3                # max AMR chunks per sample (no info loss)
 
     # Evaluation
     num_beams = 4
@@ -194,13 +195,32 @@ def evaluate_bleu(
                             desc="Evaluating", leave=False):
         batch_end = min(batch_start + config.eval_batch_size, n)
 
-        # Build prompts
+        # Build prompts with AMR pre-truncation to avoid cutting Vietnamese
+        max_length = config.saft_max_seq if use_saft else config.baseline_max_seq
         prompts = []
         for j in range(batch_start, batch_end):
             if use_saft and amr_texts:
+                # Pre-truncate AMR to ensure Vietnamese text stays intact
+                overhead_text = (
+                    f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
+                    f"<|im_start|>user\nAMR Graph:\n\n\n"
+                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                    f"<|im_start|>assistant\n"
+                )
+                overhead_len = len(tokenizer.encode(overhead_text, add_special_tokens=False))
+                amr_budget = max_length - overhead_len - 10  # safety buffer
+
+                amr_text = amr_texts[j]
+                if amr_budget > 0:
+                    amr_ids = tokenizer.encode(amr_text, add_special_tokens=False)
+                    if len(amr_ids) > amr_budget:
+                        amr_text = tokenizer.decode(amr_ids[:amr_budget], skip_special_tokens=True)
+                else:
+                    amr_text = ""
+
                 prompt = (
                     f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                    f"<|im_start|>user\nAMR Graph:\n{amr_texts[j]}\n\n"
+                    f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
                     f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
                     f"<|im_start|>assistant\n"
                 )
@@ -218,7 +238,7 @@ def evaluate_bleu(
         tokenizer.padding_side = "left"
         inputs = tokenizer(
             prompts, return_tensors="pt", padding=True, truncation=True,
-            max_length=config.saft_max_seq if use_saft else config.baseline_max_seq,
+            max_length=max_length,
         ).to(device)
 
         # For SAFT: build PE tensors for the batch
@@ -674,6 +694,7 @@ def main():
             os.path.join(config.data_dir, "train.linear.amr"),
             os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer, config.saft_max_seq, config.k_eigenvectors,
+            max_chunks=config.max_chunks,
         )
 
         pe_dim = 2 * config.k_eigenvectors
