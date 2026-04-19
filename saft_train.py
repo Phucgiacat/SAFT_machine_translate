@@ -62,7 +62,7 @@ from saft_dataset import (
 
 class Config:
     # Model
-    model_name = "Qwen/Qwen3-1.7B"
+    model_name = "Qwen/Qwen3-0.6B"
     dtype = "bf16"  # bf16 or fp16
 
     # SAFT
@@ -75,7 +75,7 @@ class Config:
     lora_r = 16
     lora_alpha = 32
     lora_dropout = 0.05
-    lora_targets = ["q_proj", "k_proj", "v_proj", "o_proj"]
+    lora_targets = ["q_proj", "v_proj"]#["q_proj", "k_proj", "v_proj", "o_proj"]
 
     # Training
     learning_rate = 2e-4
@@ -413,6 +413,11 @@ def train_track(
             epoch_loss += outputs.loss.item()
             num_batches += 1
 
+            # Free batch tensors early to reduce peak memory
+            del input_ids, attention_mask, labels, outputs, loss
+            if use_saft:
+                del amr_node_pe, amr_intra_pos, amr_mask
+
             if (batch_idx + 1) % config.gradient_accumulation == 0:
                 torch.nn.utils.clip_grad_norm_(saft_model.parameters(), 1.0)
                 optimizer.step()
@@ -428,6 +433,9 @@ def train_track(
         loss_history.append(avg_epoch_loss)
 
         # ── Per-epoch evaluation ──
+        # Free training memory before evaluation (generation needs contiguous blocks)
+        torch.cuda.empty_cache()
+
         print(f"\n{'='*60}")
         print(f"[{track_name}] Epoch {epoch} — Evaluating...")
         print(f"{'='*60}")
