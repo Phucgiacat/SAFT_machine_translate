@@ -43,7 +43,7 @@ import matplotlib.pyplot as plt
 from tqdm.auto import tqdm
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
-from peft import LoraConfig, get_peft_model, TaskType
+from peft import LoraConfig, get_peft_model, PeftModel, TaskType
 
 import sys, os as _os
 sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
@@ -560,6 +560,8 @@ def main():
     parser.add_argument('--output-dir', default='outputs')
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--model', default=None, help='Override model name')
+    parser.add_argument('--resume', default=None,
+                        help='Path to best_model dir to resume training from')
     args = parser.parse_args()
 
     config = Config()
@@ -640,7 +642,13 @@ def main():
         print("═" * 60)
 
         model, tokenizer = load_model_and_tokenizer(config)
-        model = apply_lora(model, config)
+        if args.resume:
+            print(f"  Resuming from: {args.resume}")
+            model = PeftModel.from_pretrained(model, args.resume,
+                                              is_trainable=True)
+            model.print_trainable_parameters()
+        else:
+            model = apply_lora(model, config)
 
         saft_model = SAFTModel(model, k_eigenvectors=config.k_eigenvectors,
                                sin_dim=config.sin_dim).to(model.device)
@@ -691,10 +699,22 @@ def main():
         print("═" * 60)
 
         model, tokenizer = load_model_and_tokenizer(config)
-        model = apply_lora(model, config)
+        if args.resume:
+            print(f"  Resuming from: {args.resume}")
+            model = PeftModel.from_pretrained(model, args.resume,
+                                              is_trainable=True)
+            model.print_trainable_parameters()
+        else:
+            model = apply_lora(model, config)
 
         saft_model = SAFTModel(model, k_eigenvectors=config.k_eigenvectors,
                                sin_dim=config.sin_dim).to(model.device)
+
+        # Load PE projection weights if resuming
+        pe_proj_path = os.path.join(args.resume, "pe_projection.pt") if args.resume else None
+        if pe_proj_path and os.path.exists(pe_proj_path):
+            saft_model.load_pe_projection(pe_proj_path)
+            print(f"  PE projection loaded: {pe_proj_path}")
 
         train_ds = SAFTDataset(
             os.path.join(config.data_dir, "train.vi"),
