@@ -183,48 +183,108 @@ def evaluate_bleu(
 ):
     """
     Batch generation + BLEU evaluation.
+    For SAFT track: injects Magnetic Laplacian PEs into prompt embeddings
+    via the trained MLP projection (paper-compliant inference).
     Returns (bleu_score, predictions, references).
     """
+    from saft_dataset import tokenize_with_amr_alignment
+
     saft_model.eval()
     device = next(saft_model.parameters()).device
 
     n = min(config.eval_samples, len(vi_texts))
     predictions = []
+    pe_dim = 2 * config.k_eigenvectors
 
     for batch_start in tqdm(range(0, n, config.eval_batch_size),
                             desc="Evaluating", leave=False):
         batch_end = min(batch_start + config.eval_batch_size, n)
-
-        # Build prompts with AMR pre-truncation to avoid cutting Vietnamese
         max_length = config.saft_max_seq if use_saft else config.baseline_max_seq
-        prompts = []
-        for j in range(batch_start, batch_end):
-            if use_saft and amr_texts:
-                # Pre-truncate AMR to ensure Vietnamese text stays intact
-                overhead_text = (
-                    f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                    f"<|im_start|>user\nAMR Graph:\n\n\n"
-                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
-                )
-                overhead_len = len(tokenizer.encode(overhead_text, add_special_tokens=False))
-                amr_budget = max_length - overhead_len - 10  # safety buffer
 
-                amr_text = amr_texts[j]
-                if amr_budget > 0:
-                    amr_ids = tokenizer.encode(amr_text, add_special_tokens=False)
-                    if len(amr_ids) > amr_budget:
-                        amr_text = tokenizer.decode(amr_ids[:amr_budget], skip_special_tokens=True)
-                else:
-                    amr_text = ""
+        if use_saft and pe_data is not None:
+            # ── SAFT: build prompts with per-token PE alignment ──
+            # Use tokenize_with_amr_alignment (same as training) to get
+            # aligned PE tensors, then call saft_model.generate() for
+            # proper embedding injection: H = Embed(tokens) + AmrPE
 
-                prompt = (
-                    f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                    f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
-                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
+            batch_input_ids = []
+            batch_attn_mask = []
+            batch_amr_pe = []
+            batch_amr_intra = []
+            batch_amr_mask = []
+
+            for j in range(batch_start, batch_end):
+                pe_info = pe_data[j]
+                labels_list = pe_info['labels']
+                label_pes = pe_info['label_pes']
+
+                # Tokenize with PE alignment (en_text="" for inference prompt)
+                result = tokenize_with_amr_alignment(
+                    tokenizer=tokenizer,
+                    system_msg=SYSTEM_MSG_SAFT,
+                    user_before_amr="AMR Graph:\n",
+                    amr_labels=labels_list,
+                    label_pes=label_pes,
+                    user_after_amr=f"\n\nVietnamese: {vi_texts[j]}\nEnglish:",
+                    en_text="",  # no response for inference prompt
+                    max_seq_length=max_length,
+                    pe_dim=pe_dim,
                 )
-            else:
+                batch_input_ids.append(result['input_ids'])
+                batch_attn_mask.append(result['attention_mask'])
+                batch_amr_pe.append(result['amr_node_pe'])
+                batch_amr_intra.append(result['amr_intra_pos'])
+                batch_amr_mask.append(result['amr_mask'])
+
+            # Pad batch (left-pad for generation)
+            max_len = max(ids.size(0) for ids in batch_input_ids)
+            bs = len(batch_input_ids)
+
+            padded_ids = torch.full((bs, max_len), tokenizer.pad_token_id, dtype=torch.long)
+            padded_attn = torch.zeros(bs, max_len, dtype=torch.long)
+            padded_pe = torch.zeros(bs, max_len, pe_dim, dtype=torch.float32)
+            padded_intra = torch.zeros(bs, max_len, dtype=torch.long)
+            padded_mask = torch.zeros(bs, max_len, dtype=torch.float32)
+
+            for i in range(bs):
+                seq_len = batch_input_ids[i].size(0)
+                offset = max_len - seq_len  # left-pad
+                padded_ids[i, offset:] = batch_input_ids[i]
+                padded_attn[i, offset:] = batch_attn_mask[i]
+                padded_pe[i, offset:] = batch_amr_pe[i]
+                padded_intra[i, offset:] = batch_amr_intra[i]
+                padded_mask[i, offset:] = batch_amr_mask[i]
+
+            padded_ids = padded_ids.to(device)
+            padded_attn = padded_attn.to(device)
+            padded_pe = padded_pe.to(device)
+            padded_intra = padded_intra.to(device)
+            padded_mask = padded_mask.to(device)
+
+            # Generate with PE injection via SAFTModel.generate()
+            outputs = saft_model.generate(
+                input_ids=padded_ids,
+                attention_mask=padded_attn,
+                amr_node_pe=padded_pe,
+                amr_intra_pos=padded_intra,
+                amr_mask=padded_mask,
+                max_new_tokens=config.max_new_tokens,
+                num_beams=config.num_beams,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+
+            # Decode
+            for k_idx in range(bs):
+                input_len = padded_ids[k_idx].shape[-1]
+                gen_ids = outputs[k_idx][input_len:]
+                pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                predictions.append(pred)
+
+        else:
+            # ── Baseline: standard text generation (no PE) ──
+            prompts = []
+            for j in range(batch_start, batch_end):
                 prompt = (
                     f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                     f"<|im_start|>user\n"
@@ -232,46 +292,27 @@ def evaluate_bleu(
                     f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
                     f"<|im_start|>assistant\n"
                 )
-            prompts.append(prompt)
+                prompts.append(prompt)
 
-        # Tokenize batch
-        tokenizer.padding_side = "left"
-        inputs = tokenizer(
-            prompts, return_tensors="pt", padding=True, truncation=True,
-            max_length=max_length,
-        ).to(device)
+            tokenizer.padding_side = "left"
+            inputs = tokenizer(
+                prompts, return_tensors="pt", padding=True, truncation=True,
+                max_length=max_length,
+            ).to(device)
 
-        # For SAFT: build PE tensors for the batch
-        amr_node_pe = None
-        amr_intra_pos = None
-        amr_mask_tensor = None
+            outputs = saft_model.base_model.generate(
+                **inputs,
+                max_new_tokens=config.max_new_tokens,
+                num_beams=config.num_beams,
+                do_sample=False,
+                pad_token_id=tokenizer.eos_token_id,
+            )
 
-        if use_saft and pe_data is not None:
-            bs = batch_end - batch_start
-            seq_len = inputs.input_ids.size(1)
-            pe_dim = 2 * config.k_eigenvectors
-
-            # For inference, we use a simplified approach:
-            # tokenize the full prompt and don't inject PEs during generation
-            # (generation tokens don't have AMR PEs anyway)
-            # This is a practical simplification — PEs only affect prompt understanding
-            pass
-
-        # Generate
-        outputs = saft_model.base_model.generate(
-            **inputs,
-            max_new_tokens=config.max_new_tokens,
-            num_beams=config.num_beams,
-            do_sample=False,
-            pad_token_id=tokenizer.eos_token_id,
-        )
-
-        # Decode
-        for k_idx in range(len(prompts)):
-            input_len = inputs.input_ids[k_idx].shape[-1]
-            gen_ids = outputs[k_idx][input_len:]
-            pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-            predictions.append(pred)
+            for k_idx in range(len(prompts)):
+                input_len = inputs.input_ids[k_idx].shape[-1]
+                gen_ids = outputs[k_idx][input_len:]
+                pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                predictions.append(pred)
 
     tokenizer.padding_side = "right"
 
