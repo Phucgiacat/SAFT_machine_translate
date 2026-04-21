@@ -174,8 +174,10 @@ class SAFTModel(nn.Module):
             sin_pe = sin_pe.to(inputs_embeds.dtype)
 
             # Project and add PE to embeddings
+            # Cast MLP to match model dtype (avoids float32 vs bfloat16 mismatch)
             amr_node_pe = amr_node_pe.to(inputs_embeds.dtype)
             amr_mask = amr_mask.to(inputs_embeds.dtype)
+            self.pe_projection.to(inputs_embeds.dtype)
 
             amr_pe = self.pe_projection(amr_node_pe, sin_pe, amr_mask)
             inputs_embeds = inputs_embeds + amr_pe
@@ -203,6 +205,7 @@ class SAFTModel(nn.Module):
             sin_pe = sin_pe.to(inputs_embeds.dtype)
             amr_node_pe = amr_node_pe.to(inputs_embeds.dtype)
             amr_mask = amr_mask.to(inputs_embeds.dtype)
+            self.pe_projection.to(inputs_embeds.dtype)
 
             amr_pe = self.pe_projection(amr_node_pe, sin_pe, amr_mask)
             inputs_embeds = inputs_embeds + amr_pe
