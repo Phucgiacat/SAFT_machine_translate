@@ -213,15 +213,18 @@ def translate_single(model_or_saft, tokenizer, vi_text, amr_text=None,
     """
     Translate a single Vietnamese sentence to English.
     
-    For SAFT mode with AMR linearization:
+    For SAFT mode with AMR:
+      - Accepts BOTH Penman format and BFS-linearized format
+      - Auto-detects format: if '(' present → Penman → convert to BFS first
       - Computes PEs on-the-fly (build SPG → eigendecomposition)
       - Injects PEs into prompt embeddings via SAFTModel
     
     Args:
         model_or_saft: base model (baseline) or SAFTModel (saft)
-        amr_text: BFS-linearized AMR string (e.g. "want-01 :arg0 child <stop> ...")
+        amr_text: AMR string — either Penman or BFS-linearized
     """
     from saft_pe_precompute import compute_pes_from_linear
+    from saft_bfs_linearize import bfs_linearize
 
     if isinstance(model_or_saft, SAFTModel):
         saft_model = model_or_saft
@@ -235,11 +238,23 @@ def translate_single(model_or_saft, tokenizer, vi_text, amr_text=None,
         saft_model.eval()
         pe_dim = 2 * k_eigenvectors
 
+        # Step 0: Auto-detect format & convert Penman → BFS linear
+        linear_amr = amr_text
+        if '(' in amr_text:
+            # Looks like Penman format → linearize
+            print("  [INFO] Detected Penman AMR → converting to BFS linearization...")
+            linear_amr = bfs_linearize(amr_text)
+            if linear_amr is None:
+                print("  [WARN] BFS linearization failed, using raw text as fallback")
+                linear_amr = amr_text
+            else:
+                print(f"  [INFO] BFS linear: {linear_amr[:100]}{'...' if len(linear_amr) > 100 else ''}")
+
         # Step 1: Compute PEs on-the-fly
-        pe_info = compute_pes_from_linear(amr_text, k=k_eigenvectors)
+        pe_info = compute_pes_from_linear(linear_amr, k=k_eigenvectors)
         if pe_info is None:
             # Fallback: all-zero PEs
-            labels = amr_text.strip().split()
+            labels = linear_amr.strip().split()
             pe_info = {
                 'labels': labels,
                 'label_pes': np.zeros((len(labels), pe_dim), dtype=np.float32),
