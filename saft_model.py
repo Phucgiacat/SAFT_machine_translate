@@ -223,6 +223,19 @@ class SAFTModel(nn.Module):
             amr_pe = self.pe_projection(amr_node_pe_cast, sin_pe, amr_mask_cast)
             # amr_pe shape: (batch, prompt_len, d_emb)
 
+            # Debug: compare PE scale vs embedding scale
+            with torch.no_grad():
+                embeds = embed_layer(input_ids)
+                embed_norm = embeds.norm(dim=-1).mean().item()
+                pe_norm = amr_pe.norm(dim=-1).mean().item()
+                # Only log for AMR positions (mask > 0)
+                amr_positions = amr_mask_cast[:, :, None] > 0  # (batch, seq, 1)
+                if amr_positions.any():
+                    amr_pe_norms = amr_pe[amr_positions.expand_as(amr_pe)].view(-1, amr_pe.shape[-1]).norm(dim=-1).mean().item()
+                else:
+                    amr_pe_norms = 0.0
+                print(f"  [DEBUG PE] Embed norm={embed_norm:.4f} | PE norm(all)={pe_norm:.4f} | PE norm(AMR only)={amr_pe_norms:.4f} | Ratio={pe_norm/max(embed_norm,1e-8):.4f}")
+
             # Hook: add PE to embedding output only for prompt (not generated tokens)
             def _pe_hook(module, input, output):
                 # output shape: (batch_or_beams, seq_len, d_emb)
