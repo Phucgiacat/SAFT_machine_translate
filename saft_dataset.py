@@ -76,7 +76,10 @@ def tokenize_with_amr_alignment(
     suffix_text = f"{user_after_amr}<|im_end|>\n<|im_start|>assistant\n"
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    if en_text:
+        response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    else:
+        response_ids = []  # inference: don't append <|im_end|> to prompt
 
     # Tokenize each AMR label individually to ensure perfect alignment
     amr_token_ids = []
