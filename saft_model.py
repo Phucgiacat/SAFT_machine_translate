@@ -121,6 +121,10 @@ class SAFTModel(nn.Module):
         self.k = k_eigenvectors
         self.sin_dim = sin_dim
 
+        # PE warmup scale: 0.0 → 1.0 over training
+        # Set via set_pe_scale() from training loop
+        self.pe_scale = 1.0
+
         # Get embedding dimension from model config
         d_emb = base_model.config.hidden_size
 
@@ -180,7 +184,7 @@ class SAFTModel(nn.Module):
             self.pe_projection.to(inputs_embeds.dtype)
 
             amr_pe = self.pe_projection(amr_node_pe, sin_pe, amr_mask)
-            inputs_embeds = inputs_embeds + amr_pe
+            inputs_embeds = inputs_embeds + self.pe_scale * amr_pe
 
         # Step 3: Forward through the rest of the model with modified embeddings
         # Note: Qwen3 does not allow both input_ids and inputs_embeds.
@@ -237,6 +241,7 @@ class SAFTModel(nn.Module):
                 print(f"  [DEBUG PE] Embed norm={embed_norm:.4f} | PE norm(all)={pe_norm:.4f} | PE norm(AMR only)={amr_pe_norms:.4f} | Ratio={pe_norm/max(embed_norm,1e-8):.4f}")
 
             # Hook: add PE to embedding output only for prompt (not generated tokens)
+            pe_scale = self.pe_scale
             def _pe_hook(module, input, output):
                 # output shape: (batch_or_beams, seq_len, d_emb)
                 seq_len = output.shape[1]
@@ -247,8 +252,8 @@ class SAFTModel(nn.Module):
                     if batch_size != pe_batch:
                         # Beam search expands batch: repeat PE for each beam
                         num_beams = batch_size // pe_batch
-                        return output + amr_pe.repeat_interleave(num_beams, dim=0)
-                    return output + amr_pe
+                        return output + pe_scale * amr_pe.repeat_interleave(num_beams, dim=0)
+                    return output + pe_scale * amr_pe
                 else:
                     # Subsequent passes (single token generation) → no PE
                     return output

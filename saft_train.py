@@ -366,6 +366,13 @@ def train_track(
     global_step = 0
     start_time = time.time()
 
+    # PE warmup: linearly increase pe_scale from 0 → 1 over first epoch
+    total_train_steps = len(train_loader) * config.num_epochs
+    pe_warmup_steps = len(train_loader)  # 1 epoch worth of steps
+    if use_saft:
+        saft_model.pe_scale = 0.0
+        print(f"  PE warmup: 0→1 over {pe_warmup_steps} steps (1 epoch)")
+
     for epoch in range(1, config.num_epochs + 1):
         saft_model.train()
         epoch_loss = 0.0
@@ -382,6 +389,9 @@ def train_track(
 
             # SAFT forward with PE injection
             if use_saft:
+                # Update PE warmup scale
+                saft_model.pe_scale = min(1.0, global_step / max(pe_warmup_steps, 1))
+
                 amr_node_pe = batch['amr_node_pe'].to(device)
                 amr_intra_pos = batch['amr_intra_pos'].to(device)
                 amr_mask = batch['amr_mask'].to(device)
@@ -424,7 +434,10 @@ def train_track(
 
             # Update progress bar
             avg_loss = epoch_loss / num_batches
-            progress.set_postfix(loss=f"{avg_loss:.4f}", lr=f"{scheduler.get_last_lr()[0]:.2e}")
+            postfix = {"loss": f"{avg_loss:.4f}", "lr": f"{scheduler.get_last_lr()[0]:.2e}"}
+            if use_saft:
+                postfix["pe"] = f"{saft_model.pe_scale:.2f}"
+            progress.set_postfix(**postfix)
 
         avg_epoch_loss = epoch_loss / max(num_batches, 1)
         loss_history.append(avg_epoch_loss)
