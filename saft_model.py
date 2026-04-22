@@ -184,7 +184,8 @@ class SAFTModel(nn.Module):
 
         # Step 3: Forward through the rest of the model with modified embeddings
         outputs = self.base_model(
-            inputs_embeds=inputs_embeds,
+            input_ids=input_ids,          # for RoPE position computation
+            inputs_embeds=inputs_embeds,  # actual embeddings with PE injected
             attention_mask=attention_mask,
             labels=labels,
         )

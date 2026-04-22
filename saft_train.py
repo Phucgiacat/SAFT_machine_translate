@@ -75,7 +75,7 @@ class Config:
     lora_r = 16
     lora_alpha = 32
     lora_dropout = 0.05
-    lora_targets = ["q_proj", "v_proj"]#["q_proj", "k_proj", "v_proj", "o_proj"]
+    lora_targets = ["q_proj", "v_proj"]
 
     # Training
     learning_rate = 2e-4
