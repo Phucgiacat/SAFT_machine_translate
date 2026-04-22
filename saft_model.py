@@ -211,7 +211,8 @@ class SAFTModel(nn.Module):
             inputs_embeds = inputs_embeds + amr_pe
 
             return self.base_model.generate(
-                inputs_embeds=inputs_embeds,
+                input_ids=input_ids,          # for output sequence construction
+                inputs_embeds=inputs_embeds,  # for actual forward pass (PE-injected)
                 attention_mask=attention_mask,
                 **generate_kwargs,
             )
