@@ -199,32 +199,52 @@ class SAFTModel(nn.Module):
         """
         Generate with AMR PE injection for the prompt.
 
-        For Qwen3 (and similar models) which don't allow both input_ids and
-        inputs_embeds, we pass only inputs_embeds when PE is used.
+        Uses a forward hook on the embedding layer to inject PE.
+        This avoids the Qwen3 limitation (can't pass both input_ids
+        and inputs_embeds). The hook adds PE only on the first forward
+        pass (prompt), not on subsequent single-token generation steps.
         """
         if amr_node_pe is not None and amr_mask is not None:
             embed_layer = self.get_embedding_layer()
-            inputs_embeds = embed_layer(input_ids)
+            prompt_len = input_ids.shape[1]  # length of the prompt
 
-            sin_pe = self.sin_pe_encoder(amr_intra_pos)
-            sin_pe = sin_pe.to(inputs_embeds.dtype)
-            amr_node_pe = amr_node_pe.to(inputs_embeds.dtype)
-            amr_mask = amr_mask.to(inputs_embeds.dtype)
-            self.pe_projection.to(inputs_embeds.dtype)
+            # Pre-compute the PE additive tensor
+            # We need to do this outside the hook to avoid issues with dtype
+            with torch.no_grad():
+                sin_pe = self.sin_pe_encoder(amr_intra_pos)
+                dummy_embeds = embed_layer(input_ids[:1, :1])  # just to get dtype
+                target_dtype = dummy_embeds.dtype
 
-            amr_pe = self.pe_projection(amr_node_pe, sin_pe, amr_mask)
-            inputs_embeds = inputs_embeds + amr_pe
+                sin_pe = sin_pe.to(target_dtype)
+                amr_node_pe_cast = amr_node_pe.to(target_dtype)
+                amr_mask_cast = amr_mask.to(target_dtype)
+                self.pe_projection.to(target_dtype)
 
-            # Compute position_ids from attention_mask (for left-padded eval)
-            position_ids = attention_mask.long().cumsum(-1) - 1
-            position_ids.masked_fill_(attention_mask == 0, 1)
+            amr_pe = self.pe_projection(amr_node_pe_cast, sin_pe, amr_mask_cast)
+            # amr_pe shape: (batch, prompt_len, d_emb)
 
-            return self.base_model.generate(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask,
-                position_ids=position_ids,
-                **generate_kwargs,
-            )
+            # Hook: add PE to embedding output only for prompt (not generated tokens)
+            def _pe_hook(module, input, output):
+                # output shape: (batch, seq_len, d_emb)
+                seq_len = output.shape[1]
+                if seq_len == prompt_len:
+                    # First forward pass (full prompt) → add PE
+                    return output + amr_pe
+                else:
+                    # Subsequent passes (single token generation) → no PE
+                    return output
+
+            handle = embed_layer.register_forward_hook(_pe_hook)
+            try:
+                outputs = self.base_model.generate(
+                    input_ids=input_ids,
+                    attention_mask=attention_mask,
+                    **generate_kwargs,
+                )
+            finally:
+                handle.remove()
+
+            return outputs
         else:
             return self.base_model.generate(
                 input_ids=input_ids,
