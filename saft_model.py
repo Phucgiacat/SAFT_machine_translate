@@ -225,10 +225,16 @@ class SAFTModel(nn.Module):
 
             # Hook: add PE to embedding output only for prompt (not generated tokens)
             def _pe_hook(module, input, output):
-                # output shape: (batch, seq_len, d_emb)
+                # output shape: (batch_or_beams, seq_len, d_emb)
                 seq_len = output.shape[1]
                 if seq_len == prompt_len:
                     # First forward pass (full prompt) → add PE
+                    batch_size = output.shape[0]
+                    pe_batch = amr_pe.shape[0]
+                    if batch_size != pe_batch:
+                        # Beam search expands batch: repeat PE for each beam
+                        num_beams = batch_size // pe_batch
+                        return output + amr_pe.repeat_interleave(num_beams, dim=0)
                     return output + amr_pe
                 else:
                     # Subsequent passes (single token generation) → no PE
