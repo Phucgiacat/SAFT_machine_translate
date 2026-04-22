@@ -183,9 +183,10 @@ class SAFTModel(nn.Module):
             inputs_embeds = inputs_embeds + amr_pe
 
         # Step 3: Forward through the rest of the model with modified embeddings
+        # Note: Qwen3 does not allow both input_ids and inputs_embeds.
+        # RoPE position_ids default to [0,1,...,seq_len] which is correct for right-padded training.
         outputs = self.base_model(
-            input_ids=input_ids,          # for RoPE position computation
-            inputs_embeds=inputs_embeds,  # actual embeddings with PE injected
+            inputs_embeds=inputs_embeds,
             attention_mask=attention_mask,
             labels=labels,
         )
@@ -197,6 +198,9 @@ class SAFTModel(nn.Module):
                  **generate_kwargs):
         """
         Generate with AMR PE injection for the prompt.
+
+        For Qwen3 (and similar models) which don't allow both input_ids and
+        inputs_embeds, we pass only inputs_embeds when PE is used.
         """
         if amr_node_pe is not None and amr_mask is not None:
             embed_layer = self.get_embedding_layer()
@@ -211,10 +215,14 @@ class SAFTModel(nn.Module):
             amr_pe = self.pe_projection(amr_node_pe, sin_pe, amr_mask)
             inputs_embeds = inputs_embeds + amr_pe
 
+            # Compute position_ids from attention_mask (for left-padded eval)
+            position_ids = attention_mask.long().cumsum(-1) - 1
+            position_ids.masked_fill_(attention_mask == 0, 1)
+
             return self.base_model.generate(
-                input_ids=input_ids,          # for output sequence construction
-                inputs_embeds=inputs_embeds,  # for actual forward pass (PE-injected)
+                inputs_embeds=inputs_embeds,
                 attention_mask=attention_mask,
+                position_ids=position_ids,
                 **generate_kwargs,
             )
         else:

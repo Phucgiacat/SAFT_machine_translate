@@ -274,11 +274,10 @@ def evaluate_bleu(
                 pad_token_id=tokenizer.eos_token_id,
             )
 
-            # Decode
+            # Decode — when using inputs_embeds only, generate() returns
+            # only the generated tokens (no input prefix in output)
             for k_idx in range(bs):
-                input_len = padded_ids[k_idx].shape[-1]
-                gen_ids = outputs[k_idx][input_len:]
-                pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+                pred = tokenizer.decode(outputs[k_idx], skip_special_tokens=True).strip()
                 predictions.append(pred)
 
         else:
