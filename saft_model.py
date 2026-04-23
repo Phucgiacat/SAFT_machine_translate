@@ -224,6 +224,9 @@ class SAFTModel(nn.Module):
         torch.save(self.pe_projection.state_dict(), path)
 
     def load_pe_projection(self, path: str):
-        """Load MLP projection weights."""
+        """Load MLP projection weights and match base model dtype."""
         state_dict = torch.load(path, map_location='cpu')
         self.pe_projection.load_state_dict(state_dict)
+        # Cast PE projection to match base model dtype (e.g. bfloat16)
+        model_dtype = next(self.base_model.parameters()).dtype
+        self.pe_projection.to(dtype=model_dtype)
