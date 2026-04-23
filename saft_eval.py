@@ -231,7 +231,12 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
             )
 
             for k in range(n_batch):
-                gen_ids = outputs[k][max_len:]
+                # When using inputs_embeds, generate() may return only
+                # the newly generated tokens (not input+output).
+                if outputs[k].shape[0] > max_len:
+                    gen_ids = outputs[k][max_len:]
+                else:
+                    gen_ids = outputs[k]
                 pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
                 predictions.append(pred)
 
