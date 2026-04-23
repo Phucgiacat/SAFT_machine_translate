@@ -169,6 +169,8 @@ def load_model(model_path):
 def main():
     parser = argparse.ArgumentParser(description='Evaluate or translate with saved model')
     parser.add_argument('--model-path', required=True, help='Path to saved best_model')
+    parser.add_argument('--brand', default=None,
+                        help='Model brand (informational, model loaded from --model-path)')
     parser.add_argument('--data-dir', default='../data', help='Data directory')
     parser.add_argument('--mode', choices=['baseline', 'saft'], default='baseline')
     parser.add_argument('--batch-size', type=int, default=16)

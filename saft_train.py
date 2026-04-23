@@ -54,60 +54,14 @@ from saft_dataset import (
     saft_collate_fn, baseline_collate_fn,
     SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
 )
-
-
-# ═══════════════════════════════════════════════════════════
-# Configuration
-# ═══════════════════════════════════════════════════════════
-
-class Config:
-    # Model
-    model_name = "Qwen/Qwen3-0.6B"
-    dtype = "bf16"  # bf16 or fp16
-
-    # SAFT
-    k_eigenvectors = 20
-    sin_dim = 8
-    sin_base = 1000.0
-    mlp_lr_multiplier = 1.0  # μ in paper
-
-    # LoRA
-    lora_r = 16
-    lora_alpha = 32
-    lora_dropout = 0.05
-    lora_targets = ["q_proj", "v_proj"]#["q_proj", "k_proj", "v_proj", "o_proj"]
-
-    # Training
-    learning_rate = 2e-4
-    weight_decay = 0.01
-    warmup_steps = 100
-    num_epochs = 10
-    early_stop_patience = 2
-
-    # Batch — A100 + 0.5B model
-    baseline_max_seq = 768
-    saft_max_seq = 1280
-    baseline_batch_size = 8
-    saft_batch_size = 4
-    gradient_accumulation = 8     # effective = 128
-    max_chunks = 3                # max AMR chunks per sample (no info loss)
-
-    # Evaluation
-    num_beams = 4
-    max_new_tokens = 256
-    eval_samples = 300
-    eval_batch_size = 16
-
-    # Paths
-    data_dir = "data"
-    output_dir = "/content/drive/MyDrive/output_Qwen3-1.7B"
+from saft_config import get_config, BRAND_CONFIGS
 
 
 # ═══════════════════════════════════════════════════════════
 # Model Loading
 # ═══════════════════════════════════════════════════════════
 
-def load_model_and_tokenizer(config: Config):
+def load_model_and_tokenizer(config):
     """Load base model + tokenizer with appropriate dtype."""
     print(f"Loading model: {config.model_name}")
     dtype = torch.bfloat16 if config.dtype == "bf16" and torch.cuda.is_bf16_supported() else torch.float16
@@ -134,7 +88,7 @@ def load_model_and_tokenizer(config: Config):
     return model, tokenizer
 
 
-def apply_lora(model, config: Config):
+def apply_lora(model, config):
     """Apply LoRA adapters to the model."""
     lora_config = LoraConfig(
         task_type=TaskType.CAUSAL_LM,
@@ -556,17 +510,23 @@ def evaluate_on_test(
 def main():
     parser = argparse.ArgumentParser(description='SAFT Training')
     parser.add_argument('--track', choices=['baseline', 'saft', 'both'], default='both')
+    parser.add_argument('--brand', default='qwen3',
+                        choices=sorted(BRAND_CONFIGS.keys()),
+                        help='Model brand preset (default: qwen3)')
     parser.add_argument('--data-dir', default='data')
-    parser.add_argument('--output-dir', default='outputs')
+    parser.add_argument('--output-dir', default=None,
+                        help='Override output directory (default: per-brand)')
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--model', default=None, help='Override model name')
     parser.add_argument('--resume', default=None,
                         help='Path to best_model dir to resume training from')
     args = parser.parse_args()
 
-    config = Config()
+    config = get_config(args.brand)
+    print(f"Brand: {config.brand} → {config.model_name}")
     config.data_dir = args.data_dir
-    config.output_dir = args.output_dir
+    if args.output_dir:
+        config.output_dir = args.output_dir
     config.num_epochs = args.epochs
     if args.model:
         config.model_name = args.model
