@@ -268,7 +268,7 @@ def train_track(
     val_amr: list,
     val_pe_data: list,
     comet_model,
-    config: Config,
+    config,
     output_dir: str,
     use_saft: bool = False,
 ):
