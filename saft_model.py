@@ -136,6 +136,11 @@ class SAFTModel(nn.Module):
             dim=sin_dim, base=sin_base
         )
 
+        # Cast PE projection to match base model dtype (e.g. bfloat16)
+        # so it works outside autocast (e.g. during eval generation)
+        model_dtype = next(base_model.parameters()).dtype
+        self.pe_projection.to(dtype=model_dtype)
+
     def get_embedding_layer(self):
         """Get the token embedding layer from the (possibly PEFT-wrapped) model."""
         return self.base_model.get_input_embeddings()
