@@ -136,16 +136,15 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, config):
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
-    # Tokenize structural parts
+    # Tokenize structural parts (Gemma format: no system role, folded into user)
     prefix_text = (
-        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-        f"<|im_start|>user\nAMR Graph:\n"
+        f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nVietnamese: {vi_text}\nEnglish:<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"\n\nVietnamese: {vi_text}\nEnglish:<end_of_turn>\n"
+        f"<start_of_turn>model\n"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
@@ -258,10 +257,9 @@ def evaluate_bleu(
                 else:
                     # Fallback: no PE data for this sample
                     prompt = (
-                        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                        f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                        f"<|im_start|>assistant\n"
+                        f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
+                        f"Vietnamese: {vi_texts[j]}\nEnglish:<end_of_turn>\n"
+                        f"<start_of_turn>model\n"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)
                     if len(tok_ids) > max_length:
@@ -327,11 +325,10 @@ def evaluate_bleu(
             prompts = []
             for j in range(batch_start, batch_end):
                 prompt = (
-                    f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                    f"<|im_start|>user\n"
+                    f"<start_of_turn>user\n{SYSTEM_MSG_BASELINE}\n\n"
                     f"Translate the source text from Vietnamese to English.\n"
-                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
+                    f"Vietnamese: {vi_texts[j]}\nEnglish:<end_of_turn>\n"
+                    f"<start_of_turn>model\n"
                 )
                 prompts.append(prompt)
 
@@ -638,7 +635,7 @@ def evaluate_on_test(
 def main():
     parser = argparse.ArgumentParser(description='SAFT Training')
     parser.add_argument('--track', choices=['baseline', 'saft', 'both'], default='both')
-    parser.add_argument('--brand', default='qwen3',
+    parser.add_argument('--brand', default='gemma-2b',
                         choices=sorted(BRAND_CONFIGS.keys()),
                         help='Model brand preset (default: qwen3)')
     parser.add_argument('--data-dir', default='data')

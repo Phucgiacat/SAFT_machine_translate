@@ -67,16 +67,15 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenv
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
-    # Tokenize structural parts
+    # Tokenize structural parts (Gemma format: no system role, folded into user)
     prefix_text = (
-        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-        f"<|im_start|>user\nAMR Graph:\n"
+        f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nVietnamese: {vi_text}\nEnglish:<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"\n\nVietnamese: {vi_text}\nEnglish:<end_of_turn>\n"
+        f"<start_of_turn>model\n"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
@@ -178,12 +177,10 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                         tokenizer, vi_texts[j], pe_info, max_seq, k_eigenvectors
                     )
                 else:
-                    # Fallback: no PE for this sample
                     prompt = (
-                        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                        f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                        f"<|im_start|>assistant\n"
+                        f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
+                        f"Vietnamese: {vi_texts[j]}\nEnglish:<end_of_turn>\n"
+                        f"<start_of_turn>model\n"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)[:max_seq]
                     seq_len = len(tok_ids)
@@ -245,16 +242,14 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
             prompts = []
             for j in range(bs_start, bs_end):
                 if mode == "saft" and amr_texts:
-                    p = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                         f"<|im_start|>user\nAMR Graph:\n{amr_texts[j]}\n\n"
-                         f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                         f"<|im_start|>assistant\n")
+                    p = (f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n{amr_texts[j]}\n\n"
+                         f"Vietnamese: {vi_texts[j]}\nEnglish:<end_of_turn>\n"
+                         f"<start_of_turn>model\n")
                 else:
-                    p = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                         f"<|im_start|>user\n"
+                    p = (f"<start_of_turn>user\n{SYSTEM_MSG_BASELINE}\n\n"
                          f"Translate the source text from Vietnamese to English.\n"
-                         f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                         f"<|im_start|>assistant\n")
+                         f"Vietnamese: {vi_texts[j]}\nEnglish:<end_of_turn>\n"
+                         f"<start_of_turn>model\n")
                 prompts.append(p)
 
             tokenizer.padding_side = "left"
@@ -287,16 +282,14 @@ def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
     device = next(model.parameters()).device
 
     if mode == "saft" and amr_text:
-        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                  f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
-                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
-                  f"<|im_start|>assistant\n")
+        prompt = (f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n{amr_text}\n\n"
+                  f"Vietnamese: {vi_text}\nEnglish:<end_of_turn>\n"
+                  f"<start_of_turn>model\n")
     else:
-        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                  f"<|im_start|>user\n"
+        prompt = (f"<start_of_turn>user\n{SYSTEM_MSG_BASELINE}\n\n"
                   f"Translate the source text from Vietnamese to English.\n"
-                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
-                  f"<|im_start|>assistant\n")
+                  f"Vietnamese: {vi_text}\nEnglish:<end_of_turn>\n"
+                  f"<start_of_turn>model\n")
 
     is_saft_model = isinstance(model, SAFTModel)
     gen_model = model.base_model if is_saft_model else model

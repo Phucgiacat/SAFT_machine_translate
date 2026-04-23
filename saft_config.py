@@ -120,12 +120,42 @@ class Qwen25_1_5BConfig(BaseConfig):
     output_dir = "/content/drive/MyDrive/output_Qwen2.5-1.5B"
 
 
+class GemmaConfig(BaseConfig):
+    """
+    Google Gemma-2B-IT configuration.
+    - Architecture: Gemma (decoder-only transformer)
+    - Hidden size: 2048
+    - Chat template: <start_of_turn>user / <end_of_turn> (NO system role)
+    - Vocab size: ~256k
+    - Context: 8192
+    - LoRA targets: same q_proj, v_proj as Qwen
+
+    Key differences from Qwen:
+    1. NO system role — system message is prepended to user turn
+    2. Uses <start_of_turn>/<end_of_turn> instead of <|im_start|>/<|im_end|>
+    3. Larger hidden dim (2048) → needs smaller batch sizes
+    """
+    brand = "gemma-2b"
+    model_name = "google/gemma-2b-it"
+    dtype = "bf16"
+
+    # Batch — larger model, smaller batches
+    baseline_max_seq = 768
+    saft_max_seq = 1024
+    baseline_batch_size = 4
+    saft_batch_size = 2
+
+    # Default output
+    output_dir = "/content/drive/MyDrive/output_Gemma-2B-IT"
+
+
 # ── Registry ──
 BRAND_CONFIGS = {
     "qwen3": Qwen3Config,
     "qwen2.5": Qwen25Config,
     "qwen2.5-0.5b": Qwen25Config,       # alias
     "qwen2.5-1.5b": Qwen25_1_5BConfig,
+    "gemma-2b": GemmaConfig,
 }
 
 

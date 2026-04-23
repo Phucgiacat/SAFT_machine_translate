@@ -69,14 +69,14 @@ def tokenize_with_amr_alignment(
         input_ids, attention_mask, labels,
         amr_node_pe, amr_intra_pos, amr_mask
     """
-    # Tokenize non-AMR parts
-    system_prefix = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_before_amr}"
+    # Tokenize non-AMR parts (Gemma format: no system role, folded into user)
+    system_prefix = f"<start_of_turn>user\n{system_msg}\n\n{user_before_amr}"
     prefix_ids = tokenizer.encode(system_prefix, add_special_tokens=False)
 
-    suffix_text = f"{user_after_amr}<|im_end|>\n<|im_start|>assistant\n"
+    suffix_text = f"{user_after_amr}<end_of_turn>\n<start_of_turn>model\n"
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    response_ids = tokenizer.encode(f"{en_text}<end_of_turn>", add_special_tokens=False)
 
     # Tokenize each AMR label individually to ensure perfect alignment
     amr_token_ids = []
@@ -194,17 +194,16 @@ def tokenize_baseline(
 
     # Tokenize in parts for smart truncation (avoid cutting structural tokens)
     struct_prefix = (
-        f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n"
+        f"<start_of_turn>user\n{system}\n\n"
         f"Translate the source text from Vietnamese to English.\n"
         f"Vietnamese: "
     )
-    struct_suffix = f"\nEnglish:<|im_end|>\n<|im_start|>assistant\n"
+    struct_suffix = f"\nEnglish:<end_of_turn>\n<start_of_turn>model\n"
 
     prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
     vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
     suffix_ids = tokenizer.encode(struct_suffix, add_special_tokens=False)
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    response_ids = tokenizer.encode(f"{en_text}<end_of_turn>", add_special_tokens=False)
 
     fixed_overhead = len(prefix_ids) + len(suffix_ids)
     budget = max_seq_length - fixed_overhead
@@ -367,10 +366,9 @@ class SAFTDataset(Dataset):
 
         # Estimate fixed overhead (system + user structure + suffix + closing)
         overhead_text = (
-            f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-            f"<|im_start|>user\nAMR Graph:\n\n\n"
-            f"Vietnamese: \nEnglish:<|im_end|>\n"
-            f"<|im_start|>assistant\n<|im_end|>"
+            f"<start_of_turn>user\n{SYSTEM_MSG_SAFT}\n\nAMR Graph:\n\n\n"
+            f"Vietnamese: \nEnglish:<end_of_turn>\n"
+            f"<start_of_turn>model\n<end_of_turn>"
         )
         self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
 
