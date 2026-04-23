@@ -313,8 +313,12 @@ def evaluate_bleu(
 
             # Decode
             for k_idx in range(bs):
-                input_len = max_seq
-                gen_ids = outputs[k_idx][input_len:]
+                # When using inputs_embeds, generate() may return only
+                # the newly generated tokens (not input+output).
+                if outputs[k_idx].shape[0] > max_seq:
+                    gen_ids = outputs[k_idx][max_seq:]
+                else:
+                    gen_ids = outputs[k_idx]
                 pred = tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
                 predictions.append(pred)
 
