@@ -540,15 +540,11 @@ def train_track(
         else:
             print(f"  COMET = N/A (unbabel-comet not installed, using BLEU for early stopping)")
 
-        # Early stopping: prefer COMET, fallback to BLEU
-        current_metric = comet_score if comet_score is not None else bleu_score
-        best_metric = best_comet if comet_score is not None else best_bleu
-        metric_name = "COMET" if comet_score is not None else "BLEU"
-
-        if current_metric > best_metric:
+        # Early stopping: always use BLEU
+        if bleu_score > best_bleu:
+            best_bleu = bleu_score
             if comet_score is not None:
                 best_comet = comet_score
-            best_bleu = max(best_bleu, bleu_score)
             patience_counter = 0
             best_epoch = epoch
 
@@ -559,10 +555,9 @@ def train_track(
             tokenizer.save_pretrained(best_path)
             if use_saft:
                 saft_model.save_pe_projection(os.path.join(best_path, "pe_projection.pt"))
-            print(f"  ✓ New best ({metric_name})! Saved → {best_path}")
+            print(f"  ✓ New best BLEU! Saved → {best_path}")
         else:
             patience_counter += 1
-            best_bleu = max(best_bleu, bleu_score)
             print(f"  No improvement. Patience: {patience_counter}/{config.early_stop_patience}")
             if patience_counter >= config.early_stop_patience:
                 print(f"  ✗ EARLY STOPPING at epoch {epoch}")
