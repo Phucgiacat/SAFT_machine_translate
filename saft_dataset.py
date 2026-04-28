@@ -25,9 +25,9 @@ from typing import List, Dict, Optional, Tuple
 # ─────────────────────────────────────────────────────────
 
 SYSTEM_MSG_SAFT = (
-    "You are an expert Vietnamese-to-English translation assistant. "
+    "You are an expert English-to-Vietnamese translation assistant. "
     "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
-    "Use the AMR as a semantic blueprint to produce an accurate, fluent English translation."
+    "Use the AMR as a semantic blueprint to produce an accurate, fluent Vietnamese translation."
 )
 
 SYSTEM_MSG_BASELINE = "You are a helpful translation assistant."
@@ -36,13 +36,13 @@ SYSTEM_MSG_BASELINE = "You are a helpful translation assistant."
 def build_saft_prompt_parts(vi_text: str, amr_text: str, en_text: str = None):
     """Build prompt parts for SAFT mode. Returns (system, user_before_amr, amr, user_after_amr, assistant)."""
     user_before = "AMR Graph:\n"
-    user_after = f"\n\nVietnamese: {vi_text}\nEnglish:"
+    user_after = f"\n\nEnglish: {vi_text}\nVietnamese:"
     return SYSTEM_MSG_SAFT, user_before, amr_text, user_after, en_text
 
 
 def build_baseline_prompt_parts(vi_text: str, en_text: str = None):
     """Build prompt parts for Baseline mode. Returns (system, user_content, assistant)."""
-    user_content = f"Translate the source text from Vietnamese to English.\nVietnamese: {vi_text}\nEnglish:"
+    user_content = f"Translate the source text from English to Vietnamese.\nEnglish: {vi_text}\nVietnamese:"
     return SYSTEM_MSG_BASELINE, user_content, en_text
 
 
@@ -196,15 +196,15 @@ def tokenize_baseline(
     struct_prefix = (
         f"<|im_start|>system\n{system}<|im_end|>\n"
         f"<|im_start|>user\n"
-        f"Translate the source text from Vietnamese to English.\n"
-        f"Vietnamese: "
+        f"Translate the source text from English to Vietnamese.\n"
+        f"English: "
     )
-    struct_suffix = f"\nEnglish:<|im_end|>\n<|im_start|>assistant\n"
+    struct_suffix = f"\nVietnamese:<|im_end|>\n<|im_start|>assistant\n"
 
     prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
     vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
     suffix_ids = tokenizer.encode(struct_suffix, add_special_tokens=False)
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)  # en_text = Vietnamese target
 
     fixed_overhead = len(prefix_ids) + len(suffix_ids)
     budget = max_seq_length - fixed_overhead
@@ -360,6 +360,7 @@ class SAFTDataset(Dataset):
         self.pe_data = self.pe_data[:n]
 
         # Pre-compute response token lengths for chunking decisions
+        # en_texts = Vietnamese target in En→Vi mode
         self._response_lens = [
             len(tokenizer.encode(en, add_special_tokens=False))
             for en in self.en_texts
@@ -369,7 +370,7 @@ class SAFTDataset(Dataset):
         overhead_text = (
             f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
             f"<|im_start|>user\nAMR Graph:\n\n\n"
-            f"Vietnamese: \nEnglish:<|im_end|>\n"
+            f"English: \nVietnamese:<|im_end|>\n"
             f"<|im_start|>assistant\n<|im_end|>"
         )
         self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
@@ -401,7 +402,7 @@ class SAFTDataset(Dataset):
                 user_before_amr="AMR Graph:\n",
                 amr_labels=labels_list,
                 label_pes=label_pes,
-                user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
+                user_after_amr=f"\n\nEnglish: {vi}\nVietnamese:",
                 en_text=en,
                 max_seq_length=self.max_seq_length,
                 pe_dim=self.pe_dim,
@@ -426,7 +427,7 @@ class SAFTDataset(Dataset):
                 user_before_amr="AMR Graph:\n",
                 amr_labels=list(chunk_labels),
                 label_pes=chunk_pes,
-                user_after_amr=f"\n\nVietnamese: {vi}\nEnglish:",
+                user_after_amr=f"\n\nEnglish: {vi}\nVietnamese:",
                 en_text=en,
                 max_seq_length=self.max_seq_length,
                 pe_dim=self.pe_dim,

@@ -40,9 +40,9 @@ from saft_config import get_config, BRAND_CONFIGS
 
 # ── Prompt templates ──
 SYSTEM_MSG_SAFT = (
-    "You are an expert Vietnamese-to-English translation assistant. "
+    "You are an expert English-to-Vietnamese translation assistant. "
     "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
-    "Use the AMR as a semantic blueprint to produce an accurate, fluent English translation."
+    "Use the AMR as a semantic blueprint to produce an accurate, fluent Vietnamese translation."
 )
 SYSTEM_MSG_BASELINE = "You are a helpful translation assistant."
 
@@ -75,7 +75,7 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenv
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nVietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+        f"\n\nEnglish: {vi_text}\nVietnamese:<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
@@ -182,7 +182,7 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                     prompt = (
                         f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
                         f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                        f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
                         f"<|im_start|>assistant\n"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)[:max_seq]
@@ -247,13 +247,13 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                 if mode == "saft" and amr_texts:
                     p = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
                          f"<|im_start|>user\nAMR Graph:\n{amr_texts[j]}\n\n"
-                         f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                         f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
                          f"<|im_start|>assistant\n")
                 else:
                     p = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                          f"<|im_start|>user\n"
-                         f"Translate the source text from Vietnamese to English.\n"
-                         f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                         f"Translate the source text from English to Vietnamese.\n"
+                         f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
                          f"<|im_start|>assistant\n")
                 prompts.append(p)
 
@@ -282,20 +282,20 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
 @torch.no_grad()
 def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
                      num_beams=4, max_new_tokens=256):
-    """Translate a single Vietnamese sentence to English."""
+    """Translate a single English sentence to Vietnamese."""
     model.eval()
     device = next(model.parameters()).device
 
     if mode == "saft" and amr_text:
         prompt = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
                   f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
-                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+                  f"English: {vi_text}\nVietnamese:<|im_end|>\n"
                   f"<|im_start|>assistant\n")
     else:
         prompt = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                   f"<|im_start|>user\n"
-                  f"Translate the source text from Vietnamese to English.\n"
-                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+                  f"Translate the source text from English to Vietnamese.\n"
+                  f"English: {vi_text}\nVietnamese:<|im_end|>\n"
                   f"<|im_start|>assistant\n")
 
     is_saft_model = isinstance(model, SAFTModel)
@@ -317,13 +317,13 @@ def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
     """Interactive translation loop."""
     print(f"\n{'='*50}")
     print(f"  Interactive Translation (mode={mode})")
-    print(f"  Type Vietnamese text, press Enter to translate.")
+    print(f"  Type English text, press Enter to translate.")
     print(f"  Type 'quit' or Ctrl+C to exit.")
     print(f"{'='*50}\n")
 
     while True:
         try:
-            vi_text = input("🇻🇳 Vietnamese: ").strip()
+            vi_text = input("🇬🇧 English: ").strip()
             if not vi_text or vi_text.lower() in ('quit', 'exit', 'q'):
                 print("Bye!")
                 break
@@ -336,7 +336,7 @@ def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
 
             translation = translate_single(model, tokenizer, vi_text, amr_text,
                                            mode, num_beams, max_new_tokens)
-            print(f"🇬🇧 English:    {translation}\n")
+            print(f"🇻🇳 Vietnamese: {translation}\n")
 
         except KeyboardInterrupt:
             print("\nBye!")
@@ -393,7 +393,7 @@ def main():
     parser.add_argument('--max-seq', type=int, default=1280, help='Max sequence length')
     parser.add_argument('--split', default='tst2013', help='Test split name')
     parser.add_argument('--translate', type=str, default=None,
-                        help='Translate a single Vietnamese sentence')
+                        help='Translate a single English sentence')
     parser.add_argument('--amr', type=str, default=None,
                         help='AMR text for --translate (SAFT mode)')
     parser.add_argument('--interactive', action='store_true',
@@ -423,9 +423,9 @@ def main():
     if args.translate:
         result = translate_single(model, tokenizer, args.translate, args.amr,
                                    args.mode, args.num_beams, args.max_new_tokens)
-        print(f"\n🇻🇳 Vietnamese: {args.translate}")
+        print(f"\n🇬🇧 English: {args.translate}")
         if args.amr: print(f"📊 AMR:        {args.amr}")
-        print(f"🇬🇧 English:    {result}")
+        print(f"🇻🇳 Vietnamese: {result}")
         return
 
     # ── Interactive mode ──
@@ -433,9 +433,9 @@ def main():
         interactive_loop(model, tokenizer, args.mode, args.num_beams, args.max_new_tokens)
         return
 
-    # ── Test set evaluation ──
-    test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))
-    test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))
+    # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
+    test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))   # source
+    test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))   # target (reference)
     test_amr = None
     amr_path = os.path.join(args.data_dir, f"{args.split}.linear.amr")
     if not os.path.exists(amr_path):

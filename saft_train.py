@@ -144,7 +144,7 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, config):
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nVietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+        f"\n\nEnglish: {vi_text}\nVietnamese:<|im_end|>\n"
         f"<|im_start|>assistant\n"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
@@ -260,7 +260,7 @@ def evaluate_bleu(
                     prompt = (
                         f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
                         f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                        f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
                         f"<|im_start|>assistant\n"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)
@@ -329,8 +329,8 @@ def evaluate_bleu(
                 prompt = (
                     f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                     f"<|im_start|>user\n"
-                    f"Translate the source text from Vietnamese to English.\n"
-                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                    f"Translate the source text from English to Vietnamese.\n"
+                    f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
                     f"<|im_start|>assistant\n"
                 )
                 prompts.append(prompt)
@@ -682,14 +682,15 @@ def main():
         with open(path, 'r', encoding='utf-8') as f:
             return [l.strip() for l in f]
 
-    train_vi = read_lines(os.path.join(config.data_dir, "train.vi"))
-    train_en = read_lines(os.path.join(config.data_dir, "train.en"))
+    # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
+    train_vi = read_lines(os.path.join(config.data_dir, "train.en"))   # source
+    train_en = read_lines(os.path.join(config.data_dir, "train.vi"))   # target
     train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
-    val_vi = read_lines(os.path.join(config.data_dir, "tst2012.vi"))
-    val_en = read_lines(os.path.join(config.data_dir, "tst2012.en"))
+    val_vi = read_lines(os.path.join(config.data_dir, "tst2012.en"))   # source
+    val_en = read_lines(os.path.join(config.data_dir, "tst2012.vi"))   # target
     val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
-    test_vi = read_lines(os.path.join(config.data_dir, "tst2013.vi"))
-    test_en = read_lines(os.path.join(config.data_dir, "tst2013.en"))
+    test_vi = read_lines(os.path.join(config.data_dir, "tst2013.en"))  # source
+    test_en = read_lines(os.path.join(config.data_dir, "tst2013.vi"))  # target
     test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
     print(f"  Train: {len(train_vi):,} | Val: {len(val_vi):,} | Test: {len(test_vi):,}")
 
