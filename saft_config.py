@@ -139,6 +139,9 @@ class Gemma2BConfig(BaseConfig):
     # Gemma uses its own chat template
     chat_format = "gemma"
 
+    # LoRA — test with 2 targets only
+    lora_targets = ["q_proj", "k_proj"]
+
     # Batch — 2B model, reduce batch sizes
     baseline_max_seq = 768
     saft_max_seq = 1024
