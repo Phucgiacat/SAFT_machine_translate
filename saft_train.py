@@ -743,8 +743,8 @@ def main():
                                sin_dim=config.sin_dim).to(model.device)
 
         train_ds = BaselineDataset(
-            os.path.join(config.data_dir, "train.vi"),
-            os.path.join(config.data_dir, "train.en"),
+            os.path.join(config.data_dir, "train.en"),   # source = English
+            os.path.join(config.data_dir, "train.vi"),   # target = Vietnamese
             tokenizer, config.baseline_max_seq,
         )
 
@@ -806,8 +806,8 @@ def main():
             print(f"  PE projection loaded: {pe_proj_path}")
 
         train_ds = SAFTDataset(
-            os.path.join(config.data_dir, "train.vi"),
-            os.path.join(config.data_dir, "train.en"),
+            os.path.join(config.data_dir, "train.en"),       # source = English
+            os.path.join(config.data_dir, "train.vi"),       # target = Vietnamese
             os.path.join(config.data_dir, "train.linear.amr"),
             os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer, config.saft_max_seq, config.k_eigenvectors,
