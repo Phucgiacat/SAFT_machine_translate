@@ -14,6 +14,9 @@ Usage:
 class BaseConfig:
     """Shared hyperparameters across all model brands."""
 
+    # Chat template format: 'chatml' (Qwen) or 'gemma'
+    chat_format = "chatml"
+
     # SAFT PE
     k_eigenvectors = 20
     sin_dim = 8
@@ -132,6 +135,9 @@ class Gemma2BConfig(BaseConfig):
     brand = "gemma-2b"
     model_name = "google/gemma-2-2b-it"
     dtype = "bf16"
+
+    # Gemma uses its own chat template
+    chat_format = "gemma"
 
     # Batch — 2B model, reduce batch sizes
     baseline_max_seq = 768

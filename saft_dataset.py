@@ -21,8 +21,40 @@ from typing import List, Dict, Optional, Tuple
 
 
 # ─────────────────────────────────────────────────────────
-# 1. Prompt Templates
+# 1. Prompt Templates (format-aware: ChatML vs Gemma)
 # ─────────────────────────────────────────────────────────
+
+# Global chat format — set by set_chat_format() from config
+_CHAT_FORMAT = "chatml"  # "chatml" or "gemma"
+
+
+def set_chat_format(fmt: str):
+    """Set the global chat format. Called from saft_train.py after loading config."""
+    global _CHAT_FORMAT
+    _CHAT_FORMAT = fmt
+
+
+def fmt():
+    """Return format-specific tokens based on current chat format."""
+    if _CHAT_FORMAT == "gemma":
+        return {
+            "sys_start": "<start_of_turn>user\n",   # Gemma: no system role, fold into user
+            "sys_end": "\n\n",                       # separator before user content
+            "user_start": "",                         # already in user turn
+            "user_end": "<end_of_turn>\n",
+            "asst_start": "<start_of_turn>model\n",
+            "asst_end": "<end_of_turn>",
+        }
+    else:  # chatml
+        return {
+            "sys_start": "<|im_start|>system\n",
+            "sys_end": "<|im_end|>\n",
+            "user_start": "<|im_start|>user\n",
+            "user_end": "<|im_end|>\n",
+            "asst_start": "<|im_start|>assistant\n",
+            "asst_end": "<|im_end|>",
+        }
+
 
 SYSTEM_MSG_SAFT = (
     "You are an expert English-to-Vietnamese translation assistant. "
@@ -69,14 +101,15 @@ def tokenize_with_amr_alignment(
         input_ids, attention_mask, labels,
         amr_node_pe, amr_intra_pos, amr_mask
     """
-    # Tokenize non-AMR parts
-    system_prefix = f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_before_amr}"
+    # Tokenize non-AMR parts (format-aware)
+    f = fmt()
+    system_prefix = f"{f['sys_start']}{system_msg}{f['sys_end']}{f['user_start']}{user_before_amr}"
     prefix_ids = tokenizer.encode(system_prefix, add_special_tokens=False)
 
-    suffix_text = f"{user_after_amr}<|im_end|>\n<|im_start|>assistant\n"
+    suffix_text = f"{user_after_amr}{f['user_end']}{f['asst_start']}"
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
+    response_ids = tokenizer.encode(f"{en_text}{f['asst_end']}", add_special_tokens=False)
 
     # Tokenize each AMR label individually to ensure perfect alignment
     amr_token_ids = []
@@ -192,19 +225,20 @@ def tokenize_baseline(
     """Tokenize baseline prompt (no AMR, no PE)."""
     system, user_content, assistant = build_baseline_prompt_parts(vi_text, en_text)
 
-    # Tokenize in parts for smart truncation (avoid cutting structural tokens)
+    # Tokenize in parts for smart truncation (format-aware)
+    f = fmt()
     struct_prefix = (
-        f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n"
+        f"{f['sys_start']}{system}{f['sys_end']}"
+        f"{f['user_start']}"
         f"Translate the source text from English to Vietnamese.\n"
         f"English: "
     )
-    struct_suffix = f"\nVietnamese:<|im_end|>\n<|im_start|>assistant\n"
+    struct_suffix = f"\nVietnamese:{f['user_end']}{f['asst_start']}"
 
     prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
     vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
     suffix_ids = tokenizer.encode(struct_suffix, add_special_tokens=False)
-    response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)  # en_text = Vietnamese target
+    response_ids = tokenizer.encode(f"{en_text}{f['asst_end']}", add_special_tokens=False)  # en_text = Vietnamese target
 
     fixed_overhead = len(prefix_ids) + len(suffix_ids)
     budget = max_seq_length - fixed_overhead
@@ -367,11 +401,12 @@ class SAFTDataset(Dataset):
         ]
 
         # Estimate fixed overhead (system + user structure + suffix + closing)
+        f = fmt()
         overhead_text = (
-            f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-            f"<|im_start|>user\nAMR Graph:\n\n\n"
-            f"English: \nVietnamese:<|im_end|>\n"
-            f"<|im_start|>assistant\n<|im_end|>"
+            f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+            f"{f['user_start']}AMR Graph:\n\n\n"
+            f"English: \nVietnamese:{f['user_end']}"
+            f"{f['asst_start']}{f['asst_end']}"
         )
         self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
 

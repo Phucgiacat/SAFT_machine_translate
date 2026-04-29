@@ -37,14 +37,10 @@ from peft import PeftModel
 
 from saft_model import SAFTModel
 from saft_config import get_config, BRAND_CONFIGS
-
-# ── Prompt templates ──
-SYSTEM_MSG_SAFT = (
-    "You are an expert English-to-Vietnamese translation assistant. "
-    "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
-    "Use the AMR as a semantic blueprint to produce an accurate, fluent Vietnamese translation."
+from saft_dataset import (
+    SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
+    set_chat_format, fmt,
 )
-SYSTEM_MSG_BASELINE = "You are a helpful translation assistant."
 
 
 def read_lines(path):
@@ -67,16 +63,17 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenv
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
-    # Tokenize structural parts
+    # Tokenize structural parts (format-aware)
+    f = fmt()
     prefix_text = (
-        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-        f"<|im_start|>user\nAMR Graph:\n"
+        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+        f"{f['user_start']}AMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nEnglish: {vi_text}\nVietnamese:<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"\n\nEnglish: {vi_text}\nVietnamese:{f['user_end']}"
+        f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
@@ -179,11 +176,12 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                     )
                 else:
                     # Fallback: no PE for this sample
+                    f = fmt()
                     prompt = (
-                        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                        f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
-                        f"<|im_start|>assistant\n"
+                        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                        f"{f['user_start']}AMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
+                        f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                        f"{f['asst_start']}"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)[:max_seq]
                     seq_len = len(tok_ids)
@@ -245,16 +243,18 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
             prompts = []
             for j in range(bs_start, bs_end):
                 if mode == "saft" and amr_texts:
-                    p = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                         f"<|im_start|>user\nAMR Graph:\n{amr_texts[j]}\n\n"
-                         f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
-                         f"<|im_start|>assistant\n")
+                    f = fmt()
+                    p = (f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                         f"{f['user_start']}AMR Graph:\n{amr_texts[j]}\n\n"
+                         f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                         f"{f['asst_start']}")
                 else:
-                    p = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                         f"<|im_start|>user\n"
+                    f = fmt()
+                    p = (f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
+                         f"{f['user_start']}"
                          f"Translate the source text from English to Vietnamese.\n"
-                         f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
-                         f"<|im_start|>assistant\n")
+                         f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                         f"{f['asst_start']}")
                 prompts.append(p)
 
             tokenizer.padding_side = "left"
@@ -287,16 +287,18 @@ def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
     device = next(model.parameters()).device
 
     if mode == "saft" and amr_text:
-        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                  f"<|im_start|>user\nAMR Graph:\n{amr_text}\n\n"
-                  f"English: {vi_text}\nVietnamese:<|im_end|>\n"
-                  f"<|im_start|>assistant\n")
+        f = fmt()
+        prompt = (f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                  f"{f['user_start']}AMR Graph:\n{amr_text}\n\n"
+                  f"English: {vi_text}\nVietnamese:{f['user_end']}"
+                  f"{f['asst_start']}")
     else:
-        prompt = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                  f"<|im_start|>user\n"
+        f = fmt()
+        prompt = (f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
+                  f"{f['user_start']}"
                   f"Translate the source text from English to Vietnamese.\n"
-                  f"English: {vi_text}\nVietnamese:<|im_end|>\n"
-                  f"<|im_start|>assistant\n")
+                  f"English: {vi_text}\nVietnamese:{f['user_end']}"
+                  f"{f['asst_start']}")
 
     is_saft_model = isinstance(model, SAFTModel)
     gen_model = model.base_model if is_saft_model else model
@@ -405,6 +407,7 @@ def main():
         config = get_config(args.brand)
         k_eigenvectors = config.k_eigenvectors
         sin_dim = config.sin_dim
+        set_chat_format(config.chat_format)
     else:
         k_eigenvectors = 20
         sin_dim = 8

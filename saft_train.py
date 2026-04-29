@@ -53,6 +53,7 @@ from saft_dataset import (
     SAFTDataset, BaselineDataset,
     saft_collate_fn, baseline_collate_fn,
     SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
+    set_chat_format, fmt,
 )
 from saft_config import get_config, BRAND_CONFIGS
 
@@ -136,16 +137,17 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, config):
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
-    # Tokenize structural parts
+    # Tokenize structural parts (format-aware)
+    f = fmt()
     prefix_text = (
-        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-        f"<|im_start|>user\nAMR Graph:\n"
+        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+        f"{f['user_start']}AMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nEnglish: {vi_text}\nVietnamese:<|im_end|>\n"
-        f"<|im_start|>assistant\n"
+        f"\n\nEnglish: {vi_text}\nVietnamese:{f['user_end']}"
+        f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
 
@@ -257,11 +259,12 @@ def evaluate_bleu(
                     )
                 else:
                     # Fallback: no PE data for this sample
+                    f = fmt()
                     prompt = (
-                        f"<|im_start|>system\n{SYSTEM_MSG_SAFT}<|im_end|>\n"
-                        f"<|im_start|>user\nAMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
-                        f"<|im_start|>assistant\n"
+                        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                        f"{f['user_start']}AMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
+                        f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                        f"{f['asst_start']}"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)
                     if len(tok_ids) > max_length:
@@ -326,12 +329,13 @@ def evaluate_bleu(
             # ── Baseline path: standard string-based generation ──
             prompts = []
             for j in range(batch_start, batch_end):
+                f = fmt()
                 prompt = (
-                    f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                    f"<|im_start|>user\n"
+                    f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
+                    f"{f['user_start']}"
                     f"Translate the source text from English to Vietnamese.\n"
-                    f"English: {vi_texts[j]}\nVietnamese:<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
+                    f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                    f"{f['asst_start']}"
                 )
                 prompts.append(prompt)
 
@@ -647,6 +651,7 @@ def main():
 
     config = get_config(args.brand)
     print(f"Brand: {config.brand} → {config.model_name}")
+    set_chat_format(config.chat_format)
     config.data_dir = args.data_dir
     if args.output_dir:
         config.output_dir = args.output_dir
