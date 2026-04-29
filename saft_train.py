@@ -690,13 +690,16 @@ def main():
     # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
     train_vi = read_lines(os.path.join(config.data_dir, "train.en"))   # source
     train_en = read_lines(os.path.join(config.data_dir, "train.vi"))   # target
-    train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
     val_vi = read_lines(os.path.join(config.data_dir, "tst2012.en"))   # source
     val_en = read_lines(os.path.join(config.data_dir, "tst2012.vi"))   # target
-    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
     test_vi = read_lines(os.path.join(config.data_dir, "tst2013.en"))  # source
     test_en = read_lines(os.path.join(config.data_dir, "tst2013.vi"))  # target
-    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
+
+    train_amr, val_amr, test_amr = None, None, None
+    if args.track in ('saft', 'both'):
+        train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
+        val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
+        test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
     print(f"  Train: {len(train_vi):,} | Val: {len(val_vi):,} | Test: {len(test_vi):,}")
 
     # Load precomputed PEs (for SAFT track)
