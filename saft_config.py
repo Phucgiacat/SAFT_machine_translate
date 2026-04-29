@@ -120,6 +120,28 @@ class Qwen25_1_5BConfig(BaseConfig):
     # Default output
     output_dir = "/content/drive/MyDrive/output_Qwen2.5-1.5B"
 
+class Gemma2BConfig(BaseConfig):
+    """
+    Google Gemma-2-2B-IT configuration.
+    - Architecture: Gemma-2 (GQA, RoPE, SwiGLU)
+    - Hidden size: 2304
+    - Chat template: <start_of_turn>user / <end_of_turn> (NOT ChatML)
+    - Context: 8192
+    - Vocab size: ~256k
+    """
+    brand = "gemma-2b"
+    model_name = "google/gemma-2-2b-it"
+    dtype = "bf16"
+
+    # Batch — 2B model, reduce batch sizes
+    baseline_max_seq = 768
+    saft_max_seq = 1024
+    baseline_batch_size = 4
+    saft_batch_size = 2
+
+    # Default output
+    output_dir = "/content/drive/MyDrive/output_Gemma2-2B-en2vi"
+
 
 # ── Registry ──
 BRAND_CONFIGS = {
@@ -127,6 +149,7 @@ BRAND_CONFIGS = {
     "qwen2.5": Qwen25Config,
     "qwen2.5-0.5b": Qwen25Config,       # alias
     "qwen2.5-1.5b": Qwen25_1_5BConfig,
+    "gemma-2b": Gemma2BConfig,
 }
 
 
