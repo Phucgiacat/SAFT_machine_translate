@@ -347,28 +347,41 @@ def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
             print(f"Error: {e}\n")
 
 
-def load_model(model_path, mode="baseline", k_eigenvectors=20, sin_dim=8):
+def load_model(adapter_path, config, mode="baseline"):
     """
-    Load model and tokenizer from saved path.
+    Load base model and tokenizer, then apply PEFT adapter.
     For SAFT mode: wraps with SAFTModel and loads PE projection weights.
     """
-    print(f"\nLoading model from: {model_path}")
+    print(f"\nLoading base model: {config.model_name}")
+    print(f"Loading adapter from: {adapter_path}")
     dtype = torch.bfloat16 if torch.cuda.is_bf16_supported() else torch.float16
-    model = AutoModelForCausalLM.from_pretrained(
-        model_path, torch_dtype=dtype, device_map="auto", trust_remote_code=True)
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    
+    # Load tokenizer from adapter path (or base model if missing)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(adapter_path, trust_remote_code=True)
+    except:
+        tokenizer = AutoTokenizer.from_pretrained(config.model_name, trust_remote_code=True)
+        
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
+        
+    # Load base model
+    base_model = AutoModelForCausalLM.from_pretrained(
+        config.model_name, torch_dtype=dtype, device_map="auto", trust_remote_code=True)
+        
+    # Apply LoRA adapter
+    model = PeftModel.from_pretrained(base_model, adapter_path)
+    
     print(f"  Loaded: {model.config.hidden_size}d, {dtype}")
 
     if mode == "saft":
         # Wrap with SAFTModel for PE injection
         saft_model = SAFTModel(
-            model, k_eigenvectors=k_eigenvectors, sin_dim=sin_dim
+            model, k_eigenvectors=config.k_eigenvectors, sin_dim=config.sin_dim
         ).to(model.device)
 
         # Load PE projection weights if available
-        pe_proj_path = os.path.join(model_path, "pe_projection.pt")
+        pe_proj_path = os.path.join(adapter_path, "pe_projection.pt")
         if os.path.exists(pe_proj_path):
             saft_model.load_pe_projection(pe_proj_path)
             print(f"  PE projection loaded: {pe_proj_path}")
@@ -405,12 +418,10 @@ def main():
     # Get config for PE dimensions
     if args.brand:
         config = get_config(args.brand)
-        k_eigenvectors = config.k_eigenvectors
-        sin_dim = config.sin_dim
         set_chat_format(config.chat_format)
     else:
-        k_eigenvectors = 20
-        sin_dim = 8
+        # Fallback to default
+        config = get_config("qwen3")
 
     print(f"PyTorch: {torch.__version__}")
     if torch.cuda.is_available():
@@ -418,8 +429,7 @@ def main():
 
     # ── Load model ──
     model, tokenizer = load_model(
-        args.model_path, mode=args.mode,
-        k_eigenvectors=k_eigenvectors, sin_dim=sin_dim
+        args.model_path, config=config, mode=args.mode
     )
 
     # ── Single sentence translation ──
