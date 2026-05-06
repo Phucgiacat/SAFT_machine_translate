@@ -495,13 +495,30 @@ def main():
     except Exception as e:
         print(f"\n  COMET failed: {e}")
 
+    # ── BLEURT ──
+    bleurt_score = None
+    try:
+        import evaluate
+        print("\nComputing BLEURT...")
+        # Automatically downloads BLEURT-20 checkpoint if not cached
+        bleurt_metric = evaluate.load("bleurt", module_type="metric", config_name="BLEURT-20")
+        results = bleurt_metric.compute(predictions=predictions, references=test_en)
+        bleurt_score = sum(results["scores"]) / len(results["scores"])
+        print(f"  BLEURT = {bleurt_score:.4f}")
+    except ImportError:
+        print("\n  BLEURT: skipped (evaluate or bleurt not installed)")
+        print("  Hint: pip install evaluate && pip install git+https://github.com/google-research/bleurt.git")
+    except Exception as e:
+        print(f"\n  BLEURT failed: {e}")
+
     # ── Summary ──
     print(f"\n{'='*50}")
     print(f"  Mode:  {args.mode}")
     print(f"  Split: {args.split} ({len(test_vi)} samples)")
     print(f"  PE:    {'injected' if test_pe_data else 'none'}")
     print(f"  BLEU:  {bleu.score:.2f}")
-    if comet_score: print(f"  COMET: {comet_score:.4f}")
+    if comet_score: print(f"  COMET:  {comet_score:.4f}")
+    if bleurt_score: print(f"  BLEURT: {bleurt_score:.4f}")
     print(f"{'='*50}")
 
     # ── Save ──
@@ -514,7 +531,7 @@ def main():
     results = {
         'mode': args.mode, 'split': args.split,
         'pe_injection': test_pe_data is not None,
-        'bleu': bleu.score, 'comet': comet_score,
+        'bleu': bleu.score, 'comet': comet_score, 'bleurt': bleurt_score,
         'num_samples': len(test_vi),
     }
     result_file = os.path.join(output_dir, f"{args.split}_results.json")
