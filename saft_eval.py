@@ -366,7 +366,12 @@ def load_model(adapter_path, config, mode="baseline"):
         
     # Load base model
     base_model = AutoModelForCausalLM.from_pretrained(
-        config.model_name, torch_dtype=dtype, device_map="auto", trust_remote_code=True)
+        config.model_name, 
+        torch_dtype=dtype, 
+        device_map="auto", 
+        trust_remote_code=True,
+        offload_folder="offload_dir"
+    )
         
     # Apply LoRA adapter
     model = PeftModel.from_pretrained(base_model, adapter_path)
