@@ -24,13 +24,90 @@ warnings.filterwarnings('ignore', category=UserWarning)
 # Import SAFT modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from saft_config import get_config, set_chat_format
-from saft_eval import load_model, _build_eval_prompt_with_pe
+from saft_eval import load_model
 from saft_bfs_linearize import bfs_linearize
 from saft_pe_precompute import compute_pes_from_linear
 from transformers import BartForConditionalGeneration
 
-def parse_english_to_amr(text, amr_model, amr_tokenizer, device):
-    """Parse an English sentence into a Penman AMR string using AMRBART."""
+SYSTEM_MSG_SAFT_VI2EN = (
+    "You are an expert Vietnamese-to-English translation assistant. "
+    "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+    "Use the AMR as a semantic blueprint to produce an accurate, fluent English translation."
+)
+
+def _build_eval_prompt_with_pe_vi2en(tokenizer, vi_text, pe_info, max_length, k_eigenvectors=20):
+    import numpy as np
+    from saft_dataset import fmt
+    pe_dim = 2 * k_eigenvectors
+    labels_list = pe_info['labels']
+    label_pes = pe_info['label_pes']
+
+    f = fmt()
+    prefix_text = (
+        f"{f['sys_start']}{SYSTEM_MSG_SAFT_VI2EN}{f['sys_end']}"
+        f"{f['user_start']}AMR Graph:\n"
+    )
+    prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
+
+    suffix_text = (
+        f"\n\nVietnamese: {vi_text}\nEnglish:{f['user_end']}"
+        f"{f['asst_start']}"
+    )
+    suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
+
+    amr_token_ids = []
+    amr_token_pe = []
+    amr_token_intra = []
+    label_boundaries = []
+
+    for label_idx, label in enumerate(labels_list):
+        label_boundaries.append(len(amr_token_ids))
+        tids = tokenizer.encode((" " if label_idx > 0 else "") + label, add_special_tokens=False)
+        pe = label_pes[label_idx]
+        for j, tid in enumerate(tids):
+            amr_token_ids.append(tid)
+            amr_token_pe.append(pe)
+            amr_token_intra.append(j)
+
+    fixed_len = len(prefix_ids) + len(suffix_ids)
+    amr_budget = max_length - fixed_len - 10
+
+    if amr_budget <= 0:
+        amr_token_ids, amr_token_pe, amr_token_intra = [], [], []
+    elif len(amr_token_ids) > amr_budget:
+        cut_at = next((lb for lb in reversed(label_boundaries) if lb <= amr_budget), amr_budget)
+        amr_token_ids = amr_token_ids[:cut_at]
+        amr_token_pe = amr_token_pe[:cut_at]
+        amr_token_intra = amr_token_intra[:cut_at]
+
+    all_ids = prefix_ids + amr_token_ids + suffix_ids
+    if len(all_ids) > max_length:
+        all_ids = all_ids[:max_length]
+
+    seq_len = len(all_ids)
+    amr_start = len(prefix_ids)
+
+    full_pe = np.zeros((seq_len, pe_dim), dtype=np.float32)
+    full_intra = np.zeros(seq_len, dtype=np.int64)
+    full_mask = np.zeros(seq_len, dtype=np.float32)
+
+    for j in range(len(amr_token_ids)):
+        pos = amr_start + j
+        if pos < seq_len:
+            full_pe[pos] = amr_token_pe[j]
+            full_intra[pos] = amr_token_intra[j]
+            full_mask[pos] = 1.0
+
+    return (
+        torch.tensor(all_ids, dtype=torch.long),
+        torch.tensor(full_pe, dtype=torch.float32),
+        torch.tensor(full_intra, dtype=torch.long),
+        torch.tensor(full_mask, dtype=torch.float32),
+    )
+
+
+def parse_vi_to_amr(text, amr_model, amr_tokenizer, device):
+    """Parse a Vietnamese sentence into a Penman AMR string using AMRBART."""
     import penman
     input_ids = amr_tokenizer.encode(text, return_tensors="pt").to(device)
     # The AMRBART model generates the AMR graph
@@ -52,14 +129,14 @@ def parse_english_to_amr(text, amr_model, amr_tokenizer, device):
     return penman.encode(graph).strip()
 
 @torch.no_grad()
-def translate_sentence_with_pe(model, tokenizer, english_text, pe_info, config, max_seq=1280):
+def translate_sentence_with_pe(model, tokenizer, vi_text, pe_info, config, max_seq=1280):
     """Generate translation using SAFT model with PE injection."""
     model.eval()
     device = next(model.parameters()).device
     
-    # Use the utility from saft_eval to build the prompt with PE alignment
-    ids, pe, intra, mask = _build_eval_prompt_with_pe(
-        tokenizer, english_text, pe_info, max_seq, config.k_eigenvectors
+    # Build the prompt with PE alignment for Vietnamese-to-English
+    ids, pe, intra, mask = _build_eval_prompt_with_pe_vi2en(
+        tokenizer, vi_text, pe_info, max_seq, config.k_eigenvectors
     )
     
     # Add batch dimension
@@ -97,7 +174,7 @@ def main():
     parser.add_argument('--model-path', required=True, help='Path to saved translation best_model')
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
     parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
-    parser.add_argument('--translate', type=str, default=None, help='English sentence to translate')
+    parser.add_argument('--translate', type=str, default=None, help='Vietnamese sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
     args = parser.parse_args()
     
@@ -145,9 +222,9 @@ def main():
     print(" Pipeline Ready!")
     print("="*50 + "\n")
     
-    def process_sentence(english_text):
+    def process_sentence(vi_text):
         print(f"\n[1] Parsing to AMR...")
-        penman_amr = parse_english_to_amr(english_text, amr_model, amr_tokenizer, device)
+        penman_amr = parse_vi_to_amr(vi_text, amr_model, amr_tokenizer, device)
         print(f"    Raw AMR: {penman_amr}")
         
         print(f"[2] Linearizing AMR...")
@@ -166,24 +243,24 @@ def main():
         
         print(f"[4] Generating Translation...")
         translation = translate_sentence_with_pe(
-            model, tokenizer, english_text, pe_info, config, max_seq=config.saft_max_seq
+            model, tokenizer, vi_text, pe_info, config, max_seq=config.saft_max_seq
         )
         return translation
         
     if args.translate:
         translation = process_sentence(args.translate)
-        print(f"\n🇺🇸 English:    {args.translate}")
-        print(f"🇻🇳 Vietnamese: {translation}")
+        print(f"\n🇻🇳 Vietnamese: {args.translate}")
+        print(f"🇬🇧 English:    {translation}")
         
     if args.interactive:
         while True:
             try:
-                english_text = input("\n🇺🇸 Enter English text (or 'quit'): ").strip()
-                if not english_text or english_text.lower() in ('quit', 'q', 'exit'):
+                vi_text = input("\n🇻🇳 Enter Vietnamese text (or 'quit'): ").strip()
+                if not vi_text or vi_text.lower() in ('quit', 'q', 'exit'):
                     break
-                translation = process_sentence(english_text)
+                translation = process_sentence(vi_text)
                 if translation:
-                    print(f"🇻🇳 Vietnamese: {translation}")
+                    print(f"🇬🇧 English: {translation}")
             except KeyboardInterrupt:
                 break
             except Exception as e:
