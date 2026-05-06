@@ -241,6 +241,34 @@ def main():
             
         AMRBartTokenizer.__init__ = patched_init
         
+        # Patch AMRBartTokenizer.init_amr_vocabulary to avoid "AttributeError: property 'decoder' has no setter"
+        def patched_init_amr_vocabulary(self):
+            from common.constant import raw_special_tokens
+            self.old_enc_size = old_enc_size = len(self.encoder)
+            tokens = [t for t in raw_special_tokens if t not in self.encoder]
+
+            for i, t in enumerate(tokens, start=old_enc_size):
+                self.encoder[t] = i
+
+            self.encoder = {k: i for i, (k,v) in enumerate(sorted(self.encoder.items(), key=lambda x: x[1]))}
+            my_decoder = {v: k for k, v in sorted(self.encoder.items(), key=lambda x: x[1])}
+            
+            try:
+                self.decoder = my_decoder
+            except AttributeError:
+                # If decoder is a read-only property in this transformers version, override it on the class
+                self.__class__.decoder = property(lambda self: self._amr_decoder)
+                self._amr_decoder = my_decoder
+
+            self.modified = len(tokens)
+            self.amr_bos_token = "<AMR>"
+            self.amr_bos_token_id = self.encoder[self.amr_bos_token]
+            self.amr_eos_token = "</AMR>"
+            self.amr_eos_token_id = self.encoder[self.amr_eos_token]
+            # print(f"Added {self.modified} AMR tokens")
+            
+        AMRBartTokenizer.init_amr_vocabulary = patched_init_amr_vocabulary
+        
     except ImportError as e:
         print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
         return
