@@ -194,18 +194,20 @@ def main():
     
     # Import AMRBartTokenizer from AMRBART repo
     amrbart_repo = os.path.abspath(args.amrbart_path)
-    if not os.path.exists(amrbart_repo):
-        print(f"Error: AMRBART repository not found at {amrbart_repo}")
+    amrbart_finetune = os.path.join(amrbart_repo, "fine-tune")
+    
+    if not os.path.exists(amrbart_repo) or not os.path.exists(amrbart_finetune):
+        print(f"Error: AMRBART fine-tune directory not found at {amrbart_finetune}")
         print("Please clone https://github.com/goodbai-nlp/AMRBART.git and point --amrbart-path to it.")
         return
         
-    if amrbart_repo not in sys.path:
-        sys.path.insert(0, amrbart_repo)
+    if amrbart_finetune not in sys.path:
+        sys.path.insert(0, amrbart_finetune)
     
     try:
         from model_interface.tokenization_bart import AMRBartTokenizer
     except ImportError as e:
-        print(f"Failed to import AMRBartTokenizer from {amrbart_repo}: {e}")
+        print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
         return
 
     amr_model_name = "phucgiacat/AMRBART-parser-grpo"
