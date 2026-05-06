@@ -23,7 +23,8 @@ warnings.filterwarnings('ignore', category=UserWarning)
 
 # Import SAFT modules
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from saft_config import get_config, set_chat_format
+from saft_config import get_config
+from saft_dataset import set_chat_format
 from saft_eval import load_model
 from saft_bfs_linearize import bfs_linearize
 from saft_pe_precompute import compute_pes_from_linear
