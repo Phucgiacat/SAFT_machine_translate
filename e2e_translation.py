@@ -174,6 +174,7 @@ def main():
     parser = argparse.ArgumentParser(description='E2E SAFT Translation Pipeline')
     parser.add_argument('--model-path', required=True, help='Path to saved translation best_model')
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
+    parser.add_argument('--base-model', type=str, default=None, help='Override base model name from config (e.g., Qwen/Qwen2.5-7B-Instruct)')
     parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
     parser.add_argument('--translate', type=str, default=None, help='Vietnamese sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
@@ -188,6 +189,8 @@ def main():
     
     # 1. Setup config
     config = get_config(args.brand)
+    if args.base_model:
+        config.model_name = args.base_model
     set_chat_format(config.chat_format)
     
     # 2. Load AMRBART parser
