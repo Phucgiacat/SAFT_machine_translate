@@ -27,15 +27,29 @@ from saft_config import get_config, set_chat_format
 from saft_eval import load_model, _build_eval_prompt_with_pe
 from saft_bfs_linearize import bfs_linearize
 from saft_pe_precompute import compute_pes_from_linear
-from transformers import BartForConditionalGeneration, BartTokenizer
+from transformers import BartForConditionalGeneration
 
 def parse_english_to_amr(text, amr_model, amr_tokenizer, device):
     """Parse an English sentence into a Penman AMR string using AMRBART."""
+    import penman
     input_ids = amr_tokenizer.encode(text, return_tensors="pt").to(device)
     # The AMRBART model generates the AMR graph
-    outputs = amr_model.generate(input_ids, max_length=1024, num_beams=4)
-    parsed_amr = amr_tokenizer.decode(outputs[0], skip_special_tokens=True)
-    return parsed_amr.strip()
+    outputs = amr_model.generate(input_ids, max_length=1024, num_beams=5)
+    
+    ith_pred = outputs[0].cpu().tolist()
+    ith_pred[0] = amr_tokenizer.bos_token_id
+    ith_pred = [
+        amr_tokenizer.eos_token_id if itm == amr_tokenizer.amr_eos_token_id else itm
+        for itm in ith_pred if itm != amr_tokenizer.pad_token_id
+    ]
+    
+    graph, status, (lin, backr) = amr_tokenizer.decode_amr(ith_pred, restore_name_ops=False)
+    graph.status = status
+    graph.nodes = lin
+    graph.backreferences = backr
+    graph.tokens = ith_pred
+    
+    return penman.encode(graph).strip()
 
 @torch.no_grad()
 def translate_sentence_with_pe(model, tokenizer, english_text, pe_info, config, max_seq=1280):
@@ -82,6 +96,7 @@ def main():
     parser = argparse.ArgumentParser(description='E2E SAFT Translation Pipeline')
     parser.add_argument('--model-path', required=True, help='Path to saved translation best_model')
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
+    parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
     parser.add_argument('--translate', type=str, default=None, help='English sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
     args = parser.parse_args()
@@ -99,8 +114,25 @@ def main():
     
     # 2. Load AMRBART parser
     print("\nLoading AMRBART Parser...")
+    
+    # Import AMRBartTokenizer from AMRBART repo
+    amrbart_repo = os.path.abspath(args.amrbart_path)
+    if not os.path.exists(amrbart_repo):
+        print(f"Error: AMRBART repository not found at {amrbart_repo}")
+        print("Please clone https://github.com/goodbai-nlp/AMRBART.git and point --amrbart-path to it.")
+        return
+        
+    if amrbart_repo not in sys.path:
+        sys.path.insert(0, amrbart_repo)
+    
+    try:
+        from model_interface.tokenization_bart import AMRBartTokenizer
+    except ImportError as e:
+        print(f"Failed to import AMRBartTokenizer from {amrbart_repo}: {e}")
+        return
+
     amr_model_name = "phucgiacat/AMRBART-parser-grpo"
-    amr_tokenizer = BartTokenizer.from_pretrained(amr_model_name)
+    amr_tokenizer = AMRBartTokenizer.from_pretrained(amr_model_name)
     amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
     amr_model.eval()
     
