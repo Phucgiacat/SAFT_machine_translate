@@ -214,6 +214,20 @@ def main():
     
     try:
         from model_interface.tokenization_bart import AMRBartTokenizer
+        
+        # Patch AMRBartTokenizer.__init__ to avoid "multiple values for argument 'vocab'" in Colab's transformers
+        def patched_init(self, *args, **kwargs):
+            from transformers import BartTokenizer
+            import regex as re
+            from common.constant import recategorizations
+            BartTokenizer.__init__(self, *args, **kwargs)
+            self.modified = 0
+            self.recategorizations = set(recategorizations)
+            self.patterns = re.compile(r""" ?<[a-z]+:?\d*>| ?:[^\s]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+            self.remove_pars = False
+            
+        AMRBartTokenizer.__init__ = patched_init
+        
     except ImportError as e:
         print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
         return
