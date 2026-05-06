@@ -28,7 +28,6 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 import numpy as np
 import torch
 from tqdm.auto import tqdm
-import sacrebleu
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -486,6 +485,7 @@ def main():
     )
 
     # ── BLEU ──
+    import sacrebleu
     bleu = sacrebleu.corpus_bleu(predictions, [test_en])
     print(f"\n{'='*50}")
     print(f"  BLEU = {bleu.score:.2f}")
