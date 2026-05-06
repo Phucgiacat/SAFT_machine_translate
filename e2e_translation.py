@@ -291,8 +291,17 @@ def main():
     print("="*50 + "\n")
     
     def process_sentence(vi_text):
+        print(f"\n[0] Word Segmentation...")
+        try:
+            from pyvi import ViTokenizer
+            segmented_text = ViTokenizer.tokenize(vi_text)
+            print(f"    Segmented: {segmented_text}")
+        except ImportError:
+            print("    [WARN] pyvi not installed. Using raw text. Run '!pip install pyvi' on Colab.")
+            segmented_text = vi_text
+            
         print(f"\n[1] Parsing to AMR...")
-        penman_amr = parse_vi_to_amr(vi_text, amr_model, amr_tokenizer, device)
+        penman_amr = parse_vi_to_amr(segmented_text, amr_model, amr_tokenizer, device)
         print(f"    Raw AMR: {penman_amr}")
         
         print(f"[2] Linearizing AMR...")
