@@ -204,6 +204,13 @@ def main():
         
     if amrbart_finetune not in sys.path:
         sys.path.insert(0, amrbart_finetune)
+        
+    # Monkey-patch transformers to bypass AdamW/Adafactor import errors in AMRBART's constant.py
+    import transformers
+    if not hasattr(transformers, 'AdamW'):
+        transformers.AdamW = None
+    if not hasattr(transformers, 'Adafactor'):
+        transformers.Adafactor = None
     
     try:
         from model_interface.tokenization_bart import AMRBartTokenizer
