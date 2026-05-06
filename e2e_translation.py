@@ -220,7 +220,20 @@ def main():
             from transformers import BartTokenizer
             import regex as re
             from common.constant import recategorizations
+            
+            # Avoid multiple values error if both positional and kwarg are passed
+            if len(args) > 0:
+                kwargs.pop('vocab', None)
+                kwargs.pop('vocab_file', None)
+                
             BartTokenizer.__init__(self, *args, **kwargs)
+            
+            # In some transformers versions, self.encoder is not set or replaced by self.vocab
+            if not hasattr(self, 'encoder'):
+                self.encoder = self.get_vocab().copy()
+            if not hasattr(self, 'decoder'):
+                self.decoder = {v: k for k, v in self.encoder.items()}
+                
             self.modified = 0
             self.recategorizations = set(recategorizations)
             self.patterns = re.compile(r""" ?<[a-z]+:?\d*>| ?:[^\s]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
