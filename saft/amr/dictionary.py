@@ -2,24 +2,25 @@ import os
 import urllib.request
 
 class SAFTDictionary:
-    def __init__(self, data_dir="data"):
-        self.data_dir = data_dir
+    def __init__(self, data_dir=None):
+        if data_dir is None:
+            # Default to the data directory at the root of the project
+            base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            self.data_dir = os.path.join(base_dir, "data")
+        else:
+            self.data_dir = data_dir
+            
         os.makedirs(self.data_dir, exist_ok=True)
         self.dict_path = os.path.join(self.data_dir, "vnedict.txt")
         self.vnedict_url = "http://www.denisowski.org/Vietnamese/vnedict.txt"
         self.dictionary = {}
         
     def load_dictionary(self):
-        """Loads VNEDICT from local file, downloads if not present."""
+        """Loads VNEDICT from local file."""
         if not os.path.exists(self.dict_path):
-            print(f"    Downloading VNEDICT from {self.vnedict_url}...")
-            try:
-                urllib.request.urlretrieve(self.vnedict_url, self.dict_path)
-                print("    ✓ VNEDICT downloaded successfully.")
-            except Exception as e:
-                print(f"    [WARN] Failed to download VNEDICT: {e}")
-                return False
-        
+            print(f"    [WARN] Dictionary file not found at {self.dict_path}")
+            return False
+            
         print("    Loading VNEDICT into memory...")
         try:
             with open(self.dict_path, 'r', encoding='utf-8') as f:
