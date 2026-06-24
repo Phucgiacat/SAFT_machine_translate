@@ -27,7 +27,7 @@ from typing import List, Dict, Optional
 import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from amr_graph_parser import (
+from .parser import (
     build_spg_from_bfs_linear,
     compute_magnetic_laplacian,
     extract_spectral_features,
