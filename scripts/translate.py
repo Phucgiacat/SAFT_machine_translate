@@ -217,6 +217,10 @@ def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cac
         dependency_mask = get_dependency_mask(text, amr_tokenizer, phonlp_model).to(device)
     
     with torch.cuda.amp.autocast(enabled=device != "cpu"):
+        # Bypass transformers strict kwargs validation for dependency_mask
+        if hasattr(amr_model, "_validate_model_kwargs"):
+            amr_model._validate_model_kwargs = lambda kwargs: None
+            
         outputs = amr_model.generate(
             input_ids, 
             max_length=1024, 
