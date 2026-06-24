@@ -31,7 +31,9 @@ class SAFTDictionary:
                         vi_word = parts[0].strip()
                         en_gloss = parts[1].split(';')[0].strip() # Take the first meaning
                         if vi_word and en_gloss:
-                            self.dictionary[vi_word.lower()] = en_gloss
+                            # AMR uses underscores for multi-syllable words (e.g., 'cửa_ải')
+                            vi_word_amr = vi_word.lower().replace(' ', '_')
+                            self.dictionary[vi_word_amr] = en_gloss
             print(f"    ✓ Loaded {len(self.dictionary)} dictionary entries.")
             return True
         except Exception as e:
