@@ -9,11 +9,19 @@ This script combines all the steps of the SAFT machine translation pipeline:
 
 Usage:
     python e2e_translation.py --model-path <path_to_qwen_model> --brand qwen2.5 --translate "Your English sentence."
+
+Optimizations (--fast flag):
+    - AMRBART loaded in float16 for faster AMR parsing
+    - torch.backends.cudnn.benchmark enabled
+    - AMR parse cache (avoids re-parsing identical sentences)
+    - Reduced AMRBART beam search (5 -> 3)
+    - torch.compile on AMRBART (optional, via --compile)
 """
 
 import os
 import sys
 import argparse
+import time
 import torch
 import warnings
 
@@ -29,6 +37,32 @@ from saft_eval import load_model
 from saft_bfs_linearize import bfs_linearize
 from saft_pe_precompute import compute_pes_from_linear
 from transformers import BartForConditionalGeneration
+
+
+# ─────────────────────────────────────────────────────────
+# AMR Parse Cache — avoid re-parsing identical sentences
+# ─────────────────────────────────────────────────────────
+class AMRCache:
+    """Simple in-memory cache for AMR parse results."""
+    def __init__(self, maxsize=256):
+        self._cache = {}
+        self._maxsize = maxsize
+
+    def get(self, text):
+        return self._cache.get(text)
+
+    def put(self, text, amr):
+        if len(self._cache) >= self._maxsize:
+            # Evict oldest entry (FIFO)
+            oldest_key = next(iter(self._cache))
+            del self._cache[oldest_key]
+        self._cache[text] = amr
+
+    def __contains__(self, text):
+        return text in self._cache
+
+
+_amr_cache = AMRCache()
 
 SYSTEM_MSG_SAFT_VI2EN = (
     "You are an expert Vietnamese-to-English translation assistant. "
@@ -107,12 +141,29 @@ def _build_eval_prompt_with_pe_vi2en(tokenizer, vi_text, pe_info, max_length, k_
     )
 
 
-def parse_vi_to_amr(text, amr_model, amr_tokenizer, device):
-    """Parse a Vietnamese sentence into a Penman AMR string using AMRBART."""
+def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True):
+    """Parse a Vietnamese sentence into a Penman AMR string using AMRBART.
+    
+    Args:
+        text: Input Vietnamese text
+        amr_model: AMRBART model
+        amr_tokenizer: AMRBart tokenizer
+        device: torch device
+        num_beams: beam search width (reduce for speed, e.g. 3)
+        use_cache: if True, cache results to avoid re-parsing identical sentences
+    """
+    global _amr_cache
+    
+    # Check cache first
+    if use_cache and text in _amr_cache:
+        return _amr_cache.get(text)
+    
     import penman
     input_ids = amr_tokenizer.encode(text, return_tensors="pt").to(device)
-    # The AMRBART model generates the AMR graph
-    outputs = amr_model.generate(input_ids, max_length=1024, num_beams=5)
+    
+    # Use autocast for mixed precision inference
+    with torch.cuda.amp.autocast(enabled=device != "cpu"):
+        outputs = amr_model.generate(input_ids, max_length=1024, num_beams=num_beams)
     
     ith_pred = outputs[0].cpu().tolist()
     ith_pred[0] = amr_tokenizer.bos_token_id
@@ -127,9 +178,15 @@ def parse_vi_to_amr(text, amr_model, amr_tokenizer, device):
     graph.backreferences = backr
     graph.tokens = ith_pred
     
-    return penman.encode(graph).strip()
+    result = penman.encode(graph).strip()
+    
+    # Store in cache
+    if use_cache:
+        _amr_cache.put(text, result)
+    
+    return result
 
-@torch.no_grad()
+@torch.inference_mode()
 def translate_sentence_with_pe(model, tokenizer, vi_text, pe_info, config, max_seq=1280):
     """Generate translation using SAFT model with PE injection."""
     model.eval()
@@ -179,6 +236,8 @@ def main():
     parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMR parser checkpoint (default: phucgiacat/AMRBART-parser-grpo from HuggingFace)')
     parser.add_argument('--translate', type=str, default=None, help='Vietnamese sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
+    parser.add_argument('--fast', action='store_true', help='Enable inference optimizations (FP16 AMRBART, reduced beams, cache)')
+    parser.add_argument('--compile', action='store_true', help='Apply torch.compile to AMRBART (requires PyTorch 2.0+, slow first run)')
     args = parser.parse_args()
     
     if not args.translate and not args.interactive:
@@ -187,6 +246,14 @@ def main():
         
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
+    
+    # Apply CUDA optimizations
+    if device == "cuda":
+        torch.backends.cudnn.benchmark = True
+        if args.fast:
+            print("⚡ Fast mode enabled: FP16 AMRBART, reduced beams, AMR cache")
+    
+    pipeline_start = time.time()
     
     # 1. Setup config
     config = get_config(args.brand)
@@ -280,8 +347,28 @@ def main():
     amr_model_name = args.amr_checkpoint if args.amr_checkpoint else "phucgiacat/AMRBART-parser-grpo"
     print(f"    Loading AMR model from: {amr_model_name}")
     amr_tokenizer = AMRBartTokenizer.from_pretrained(amr_model_name)
-    amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
+    
+    # Load AMRBART — use float16 in fast mode for ~2x speedup
+    if args.fast and device == "cuda":
+        amr_model = BartForConditionalGeneration.from_pretrained(
+            amr_model_name, torch_dtype=torch.float16
+        ).to(device)
+        print("    ✓ AMRBART loaded in float16")
+    else:
+        amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
     amr_model.eval()
+    
+    # Optional: torch.compile for further speedup (slow first run, fast subsequent)
+    if args.compile:
+        try:
+            amr_model = torch.compile(amr_model, mode="reduce-overhead")
+            print("    ✓ AMRBART compiled with torch.compile")
+        except Exception as e:
+            print(f"    [WARN] torch.compile failed: {e}")
+    
+    # Set AMR beam count — reduced in fast mode
+    amr_num_beams = 3 if args.fast else 5
+    print(f"    AMR beams: {amr_num_beams}")
     
     # 3. Load SAFT Translation model
     print("\nLoading Translation Model...")
@@ -293,6 +380,9 @@ def main():
     print("="*50 + "\n")
     
     def process_sentence(vi_text):
+        total_start = time.time()
+        
+        t0 = time.time()
         print(f"\n[0] Word Segmentation...")
         try:
             from pyvi import ViTokenizer
@@ -301,29 +391,44 @@ def main():
         except ImportError:
             print("    [WARN] pyvi not installed. Using raw text. Run '!pip install pyvi' on Colab.")
             segmented_text = vi_text
+        print(f"    ⏱ {time.time() - t0:.2f}s")
             
+        t1 = time.time()
         print(f"\n[1] Parsing to AMR...")
-        penman_amr = parse_vi_to_amr(segmented_text, amr_model, amr_tokenizer, device)
+        cached = segmented_text in _amr_cache
+        penman_amr = parse_vi_to_amr(
+            segmented_text, amr_model, amr_tokenizer, device,
+            num_beams=amr_num_beams, use_cache=True
+        )
         print(f"    Raw AMR: {penman_amr}")
+        print(f"    ⏱ {time.time() - t1:.2f}s" + (" (cached)" if cached else ""))
         
+        t2 = time.time()
         print(f"[2] Linearizing AMR...")
         linear_amr = bfs_linearize(penman_amr)
         if not linear_amr:
             print("    Failed to linearize AMR. Falling back to plain text.")
             return None
         print(f"    Linear AMR: {linear_amr[:100]}...")
+        print(f"    ⏱ {time.time() - t2:.2f}s")
         
+        t3 = time.time()
         print(f"[3] Computing Positional Encodings (PE)...")
         pe_info = compute_pes_from_linear(linear_amr, k=config.k_eigenvectors, q=0.25)
         if not pe_info:
             print("    Failed to compute PE.")
             return None
         print(f"    Extracted {len(pe_info['labels'])} label PEs.")
+        print(f"    ⏱ {time.time() - t3:.2f}s")
         
+        t4 = time.time()
         print(f"[4] Generating Translation...")
         translation = translate_sentence_with_pe(
             model, tokenizer, vi_text, pe_info, config, max_seq=config.saft_max_seq
         )
+        print(f"    ⏱ {time.time() - t4:.2f}s")
+        
+        print(f"\n    ⏱ Total pipeline: {time.time() - total_start:.2f}s")
         return translation
         
     if args.translate:
