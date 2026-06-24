@@ -154,10 +154,17 @@ def linearize_split(
     results = []
     stats = {'success': 0, 'fail': 0}
 
+    # Load dictionary once
+    from saft.amr.dictionary import SAFTDictionary
+    saft_dict = SAFTDictionary()
+    saft_dict.load_dictionary()
+
     for idx, (entry_id, snt, penman_str) in enumerate(entries):
         linear = bfs_linearize(penman_str)
         if linear is not None:
-            results.append(linear)
+            # Apply Dictionary Enrichment using the source sentence
+            enriched_linear = saft_dict.enrich_linear_amr(linear, snt)
+            results.append(enriched_linear)
             stats['success'] += 1
         else:
             # Fallback: use concept from root if possible

@@ -30,12 +30,17 @@ warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=UserWarning)
 
 # Import SAFT modules
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from saft_config import get_config
-from saft_dataset import set_chat_format
-from saft_eval import load_model
-from saft_bfs_linearize import bfs_linearize
-from saft_pe_precompute import compute_pes_from_linear
+import sys, os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
+from saft.config import get_config
+from saft.dataset import set_chat_format
+from evaluate import load_model
+from saft.amr.bfs import bfs_linearize
+from saft.amr.pe import compute_pes_from_linear
 from transformers import BartForConditionalGeneration
 
 
@@ -64,28 +69,32 @@ class AMRCache:
 
 _amr_cache = AMRCache()
 
-SYSTEM_MSG_SAFT_VI2EN = (
-    "You are an expert Vietnamese-to-English translation assistant. "
-    "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
-    "Use the AMR as a semantic blueprint to produce an accurate, fluent English translation."
-)
-
-def _build_eval_prompt_with_pe_vi2en(tokenizer, vi_text, pe_info, max_length, k_eigenvectors=20):
+def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length, k_eigenvectors, src_lang="vi", tgt_lang="en"):
     import numpy as np
-    from saft_dataset import fmt
+    from saft.dataset import fmt
     pe_dim = 2 * k_eigenvectors
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
+    system_msg = (
+        f"You are an expert {src}-to-{tgt} translation assistant. "
+        "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+        f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+    )
+
     f = fmt()
     prefix_text = (
-        f"{f['sys_start']}{SYSTEM_MSG_SAFT_VI2EN}{f['sys_end']}"
+        f"{f['sys_start']}{system_msg}{f['sys_end']}"
         f"{f['user_start']}AMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nVietnamese: {vi_text}\nEnglish:{f['user_end']}"
+        f"\n\n{src}: {src_text}\n{tgt}:{f['user_end']}"
         f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
@@ -143,58 +152,100 @@ def _build_eval_prompt_with_pe_vi2en(tokenizer, vi_text, pe_info, max_length, k_
 
 def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True):
     """Parse a Vietnamese sentence into a Penman AMR string using AMRBART.
-    
-    Args:
-        text: Input Vietnamese text
-        amr_model: AMRBART model
-        amr_tokenizer: AMRBart tokenizer
-        device: torch device
-        num_beams: beam search width (reduce for speed, e.g. 3)
-        use_cache: if True, cache results to avoid re-parsing identical sentences
+    Includes Beam-search fallback and Semantic Concept Injection.
     """
     global _amr_cache
-    
-    # Check cache first
     if use_cache and text in _amr_cache:
         return _amr_cache.get(text)
     
     import penman
     input_ids = amr_tokenizer.encode(text, return_tensors="pt").to(device)
     
-    # Use autocast for mixed precision inference
     with torch.cuda.amp.autocast(enabled=device != "cpu"):
-        outputs = amr_model.generate(input_ids, max_length=1024, num_beams=num_beams)
+        outputs = amr_model.generate(
+            input_ids, 
+            max_length=1024, 
+            num_beams=num_beams,
+            num_return_sequences=num_beams # Enable returning all beams for fallback
+        )
     
-    ith_pred = outputs[0].cpu().tolist()
-    ith_pred[0] = amr_tokenizer.bos_token_id
-    ith_pred = [
-        amr_tokenizer.eos_token_id if itm == amr_tokenizer.amr_eos_token_id else itm
-        for itm in ith_pred if itm != amr_tokenizer.pad_token_id
-    ]
+    valid_graph = None
+    best_ith_pred = None
     
-    graph, status, (lin, backr) = amr_tokenizer.decode_amr(ith_pred, restore_name_ops=False)
-    graph.status = status
-    graph.nodes = lin
-    graph.backreferences = backr
-    graph.tokens = ith_pred
+    # Lớp 1: Beam-search Fallback
+    for i in range(outputs.shape[0]):
+        ith_pred = outputs[i].cpu().tolist()
+        ith_pred[0] = amr_tokenizer.bos_token_id
+        ith_pred = [
+            amr_tokenizer.eos_token_id if itm == amr_tokenizer.amr_eos_token_id else itm
+            for itm in ith_pred if itm != amr_tokenizer.pad_token_id
+        ]
+        
+        graph, status, (lin, backr) = amr_tokenizer.decode_amr(ith_pred, restore_name_ops=False)
+        graph.status = status
+        graph.nodes = lin
+        graph.backreferences = backr
+        graph.tokens = ith_pred
+        
+        try:
+            # Check valid penman encoding
+            penman_str = penman.encode(graph).strip()
+            valid_graph = graph
+            best_ith_pred = ith_pred
+            break
+        except Exception:
+            continue
+            
+    if not valid_graph:
+        # Fallback to beam 0
+        ith_pred = outputs[0].cpu().tolist()
+        ith_pred[0] = amr_tokenizer.bos_token_id
+        ith_pred = [
+            amr_tokenizer.eos_token_id if itm == amr_tokenizer.amr_eos_token_id else itm
+            for itm in ith_pred if itm != amr_tokenizer.pad_token_id
+        ]
+        graph, status, (lin, backr) = amr_tokenizer.decode_amr(ith_pred, restore_name_ops=False)
+        graph.status = status
+        graph.nodes = lin
+        graph.backreferences = backr
+        graph.tokens = ith_pred
+        valid_graph = graph
+        
+    try:
+        result = penman.encode(valid_graph).strip()
+    except Exception:
+        result = "(z1 / amr-empty)"
+        
+    # Lớp 2: Semantic Concept Injection
+    # Lọc danh từ/động từ quan trọng (giả lập bằng từ > 2 ký tự)
+    words = [w for w in text.split() if w.isalpha() and len(w) > 2]
+    existing_concepts_str = result.lower()
+    injections = []
+    var_idx = 100
+    for w in words:
+        if w.lower() not in existing_concepts_str:
+            injections.append(f":topic (z{var_idx} / {w})")
+            var_idx += 1
+            
+    if injections and result != "(z1 / amr-empty)":
+        parts = result.rsplit(')', 1)
+        if len(parts) == 2:
+            result = parts[0] + "\n      " + "\n      ".join(injections) + ")" + parts[1]
     
-    result = penman.encode(graph).strip()
-    
-    # Store in cache
     if use_cache:
         _amr_cache.put(text, result)
     
     return result
 
 @torch.inference_mode()
-def translate_sentence_with_pe(model, tokenizer, vi_text, pe_info, config, max_seq=1280):
+def translate_sentence_with_pe(model, tokenizer, src_text, pe_info, config, src_lang="vi", tgt_lang="en", max_seq=1280):
     """Generate translation using SAFT model with PE injection."""
     model.eval()
     device = next(model.parameters()).device
     
-    # Build the prompt with PE alignment for Vietnamese-to-English
-    ids, pe, intra, mask = _build_eval_prompt_with_pe_vi2en(
-        tokenizer, vi_text, pe_info, max_seq, config.k_eigenvectors
+    # Build the prompt with PE alignment
+    ids, pe, intra, mask = _build_eval_prompt_with_pe(
+        tokenizer, src_text, pe_info, max_seq, config.k_eigenvectors, src_lang, tgt_lang
     )
     
     # Add batch dimension
@@ -233,11 +284,13 @@ def main():
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
     parser.add_argument('--base-model', type=str, default=None, help='Override base model name from config (e.g., Qwen/Qwen2.5-7B-Instruct)')
     parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
-    parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMR parser checkpoint (default: phucgiacat/AMRBART-parser-grpo from HuggingFace)')
-    parser.add_argument('--translate', type=str, default=None, help='Vietnamese sentence to translate')
+    parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMR parser checkpoint')
+    parser.add_argument('--translate', type=str, default=None, help='Sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
-    parser.add_argument('--fast', action='store_true', help='Enable inference optimizations (FP16 AMRBART, reduced beams, cache)')
-    parser.add_argument('--compile', action='store_true', help='Apply torch.compile to AMRBART (requires PyTorch 2.0+, slow first run)')
+    parser.add_argument('--fast', action='store_true', help='Enable inference optimizations')
+    parser.add_argument('--compile', action='store_true', help='Apply torch.compile to AMRBART')
+    parser.add_argument('--in', dest='src_lang', default='vi', help='Source language code (default: vi)')
+    parser.add_argument('--out', dest='tgt_lang', default='en', help='Target language code (default: en)')
     args = parser.parse_args()
     
     if not args.translate and not args.interactive:
@@ -375,22 +428,31 @@ def main():
     model, tokenizer = load_model(args.model_path, config=config, mode="saft")
     model.eval()
     
+    # 4. Load Dictionary for Enrichment
+    from saft.amr.dictionary import SAFTDictionary
+    saft_dict = SAFTDictionary()
+    saft_dict.load_dictionary()
+    
     print("\n" + "="*50)
     print(" Pipeline Ready!")
+    print(f" Mode: {args.src_lang.upper()} -> {args.tgt_lang.upper()}")
     print("="*50 + "\n")
     
-    def process_sentence(vi_text):
+    def process_sentence(src_text):
         total_start = time.time()
         
         t0 = time.time()
         print(f"\n[0] Word Segmentation...")
-        try:
-            from pyvi import ViTokenizer
-            segmented_text = ViTokenizer.tokenize(vi_text)
-            print(f"    Segmented: {segmented_text}")
-        except ImportError:
-            print("    [WARN] pyvi not installed. Using raw text. Run '!pip install pyvi' on Colab.")
-            segmented_text = vi_text
+        if args.src_lang == 'vi':
+            try:
+                from pyvi import ViTokenizer
+                segmented_text = ViTokenizer.tokenize(src_text)
+                print(f"    Segmented: {segmented_text}")
+            except ImportError:
+                print("    [WARN] pyvi not installed. Using raw text.")
+                segmented_text = src_text
+        else:
+            segmented_text = src_text
         print(f"    ⏱ {time.time() - t0:.2f}s")
             
         t1 = time.time()
@@ -404,12 +466,16 @@ def main():
         print(f"    ⏱ {time.time() - t1:.2f}s" + (" (cached)" if cached else ""))
         
         t2 = time.time()
-        print(f"[2] Linearizing AMR...")
+        print(f"[2] Linearizing and Enriching AMR...")
         linear_amr = bfs_linearize(penman_amr)
         if not linear_amr:
             print("    Failed to linearize AMR. Falling back to plain text.")
             return None
-        print(f"    Linear AMR: {linear_amr[:100]}...")
+            
+        # Dictionary Enrichment
+        linear_amr = saft_dict.enrich_linear_amr(linear_amr)
+        
+        print(f"    Enriched Linear AMR: {linear_amr[:100]}...")
         print(f"    ⏱ {time.time() - t2:.2f}s")
         
         t3 = time.time()
@@ -424,7 +490,8 @@ def main():
         t4 = time.time()
         print(f"[4] Generating Translation...")
         translation = translate_sentence_with_pe(
-            model, tokenizer, vi_text, pe_info, config, max_seq=config.saft_max_seq
+            model, tokenizer, src_text, pe_info, config, 
+            src_lang=args.src_lang, tgt_lang=args.tgt_lang, max_seq=config.saft_max_seq
         )
         print(f"    ⏱ {time.time() - t4:.2f}s")
         
@@ -433,21 +500,22 @@ def main():
         
     if args.translate:
         translation = process_sentence(args.translate)
-        print(f"\n🇻🇳 Vietnamese: {args.translate}")
-        print(f"🇬🇧 English:    {translation}")
+        print(f"\n{args.src_lang.upper()} Source: {args.translate}")
+        print(f"{args.tgt_lang.upper()} Translation:    {translation}")
         
     if args.interactive:
         while True:
             try:
-                vi_text = input("\n🇻🇳 Enter Vietnamese text (or 'quit'): ").strip()
-                if not vi_text or vi_text.lower() in ('quit', 'q', 'exit'):
+                src_text = input(f"\n{args.src_lang.upper()} Enter text (or 'quit'): ").strip()
+                if not src_text or src_text.lower() in ('quit', 'q', 'exit'):
                     break
-                translation = process_sentence(vi_text)
+                translation = process_sentence(src_text)
                 if translation:
-                    print(f"🇬🇧 English: {translation}")
+                    print(f"{args.tgt_lang.upper()} Translation: {translation}")
             except KeyboardInterrupt:
                 break
             except Exception as e:
+                print(f"Error: {e}")
                 print(f"Error: {e}")
 
 if __name__ == "__main__":

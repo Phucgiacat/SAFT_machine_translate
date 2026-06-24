@@ -46,16 +46,18 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import LoraConfig, get_peft_model, PeftModel, TaskType
 
 import sys, os as _os
-sys.path.insert(0, _os.path.dirname(_os.path.abspath(__file__)))
+current_dir = _os.path.dirname(_os.path.abspath(__file__))
+parent_dir = _os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
-from saft_model import SAFTModel
-from saft_dataset import (
+from saft.model import SAFTModel
+from saft.dataset import (
     SAFTDataset, BaselineDataset,
     saft_collate_fn, baseline_collate_fn,
-    SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
-    set_chat_format, fmt,
+    fmt,
 )
-from saft_config import get_config, BRAND_CONFIGS
+from saft.config import get_config, BRAND_CONFIGS
 
 
 # ═══════════════════════════════════════════════════════════
@@ -125,7 +127,7 @@ def get_cosine_schedule_with_warmup(optimizer, warmup_steps, total_steps):
 # Evaluation
 # ═══════════════════════════════════════════════════════════
 
-def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, config):
+def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length, config, src_lang="en", tgt_lang="vi"):
     """
     Build an eval prompt with aligned PE tensors for a single sample.
     Tokenizes parts separately (like training dataset) so AMR labels
@@ -137,16 +139,22 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, config):
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
 
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
+    system_msg = get_system_msg_saft(src_lang, tgt_lang)
+
     # Tokenize structural parts (format-aware)
     f = fmt()
     prefix_text = (
-        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+        f"{f['sys_start']}{system_msg}{f['sys_end']}"
         f"{f['user_start']}AMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nEnglish: {vi_text}\nVietnamese:{f['user_end']}"
+        f"\n\n{src}: {src_text}\n{tgt}:{f['user_end']}"
         f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
@@ -235,6 +243,10 @@ def evaluate_bleu(
     """
     saft_model.eval()
     device = next(saft_model.parameters()).device
+    
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(config.src_lang, config.src_lang)
+    tgt = lang_map.get(config.tgt_lang, config.tgt_lang)
 
     n = min(config.eval_samples, len(vi_texts))
     predictions = []
@@ -255,15 +267,16 @@ def evaluate_bleu(
                 pe_info = pe_data[j] if j < len(pe_data) else None
                 if pe_info is not None:
                     ids, pe, intra, mask = _build_eval_prompt_with_pe(
-                        tokenizer, vi_texts[j], pe_info, max_length, config
+                        tokenizer, vi_texts[j], pe_info, max_length, config, config.src_lang, config.tgt_lang
                     )
                 else:
                     # Fallback: no PE data for this sample
                     f = fmt()
+                    system_msg = get_system_msg_saft(config.src_lang, config.tgt_lang)
                     prompt = (
-                        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                        f"{f['sys_start']}{system_msg}{f['sys_end']}"
                         f"{f['user_start']}AMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                        f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
                         f"{f['asst_start']}"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)
@@ -329,15 +342,22 @@ def evaluate_bleu(
             # ── Baseline path: standard string-based generation ──
             prompts = []
             for j in range(batch_start, batch_end):
-                f = fmt()
-                prompt = (
-                    f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
-                    f"{f['user_start']}"
-                    f"Translate the source text from English to Vietnamese.\n"
-                    f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
-                    f"{f['asst_start']}"
-                )
-                prompts.append(prompt)
+                if use_saft and amr_texts:
+                    f = fmt()
+                    system_msg = get_system_msg_saft(config.src_lang, config.tgt_lang)
+                    p = (f"{f['sys_start']}{system_msg}{f['sys_end']}"
+                         f"{f['user_start']}AMR Graph:\n{amr_texts[j]}\n\n"
+                         f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
+                         f"{f['asst_start']}")
+                else:
+                    f = fmt()
+                    system_msg = get_system_msg_baseline()
+                    p = (f"{f['sys_start']}{system_msg}{f['sys_end']}"
+                         f"{f['user_start']}"
+                         f"Translate the source text from {src} to {tgt}.\n"
+                         f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
+                         f"{f['asst_start']}")
+                prompts.append(p)
 
             tokenizer.padding_side = "left"
             inputs = tokenizer(
@@ -646,13 +666,17 @@ def main():
     parser.add_argument('--epochs', type=int, default=10)
     parser.add_argument('--model', default=None, help='Override model name')
     parser.add_argument('--resume', default=None,
-                        help='Path to best_model dir to resume training from')
+                        help='Resume from a checkpoint directory')
+    parser.add_argument('--in', dest='src_lang', default='en', help='Source language code (default: en)')
+    parser.add_argument('--out', dest='tgt_lang', default='vi', help='Target language code (default: vi)')
     args = parser.parse_args()
 
     config = get_config(args.brand)
     print(f"Brand: {config.brand} → {config.model_name}")
     set_chat_format(config.chat_format)
     config.data_dir = args.data_dir
+    config.src_lang = args.src_lang
+    config.tgt_lang = args.tgt_lang
     if args.output_dir:
         config.output_dir = args.output_dir
     config.num_epochs = args.epochs
@@ -745,10 +769,14 @@ def main():
         saft_model = SAFTModel(model, k_eigenvectors=config.k_eigenvectors,
                                sin_dim=config.sin_dim).to(model.device)
 
+        print("\nLoading Baseline Dataset...")
         train_ds = BaselineDataset(
-            os.path.join(config.data_dir, "train.en"),   # source = English
-            os.path.join(config.data_dir, "train.vi"),   # target = Vietnamese
-            tokenizer, config.baseline_max_seq,
+            vi_file=os.path.join(config.data_dir, "train.en"),
+            en_file=os.path.join(config.data_dir, "train.vi"),
+            tokenizer=tokenizer,
+            max_seq_length=config.baseline_max_seq,
+            src_lang=args.src_lang,
+            tgt_lang=args.tgt_lang
         )
 
         train_loader = DataLoader(
@@ -808,12 +836,17 @@ def main():
             saft_model.load_pe_projection(pe_proj_path)
             print(f"  PE projection loaded: {pe_proj_path}")
 
+        print("\nLoading SAFT Dataset...")
         train_ds = SAFTDataset(
-            os.path.join(config.data_dir, "train.en"),       # source = English
-            os.path.join(config.data_dir, "train.vi"),       # target = Vietnamese
-            os.path.join(config.data_dir, "train.linear.amr"),
-            os.path.join(config.data_dir, "train_pes.pkl"),
-            tokenizer, config.saft_max_seq, config.k_eigenvectors,
+            vi_file=os.path.join(config.data_dir, "train.en"),
+            en_file=os.path.join(config.data_dir, "train.vi"),
+            linear_amr_file=os.path.join(config.data_dir, "train.linear.amr"),
+            pe_file=os.path.join(config.data_dir, "train_pes.pkl"),
+            tokenizer=tokenizer,
+            max_seq_length=config.saft_max_seq,
+            k_eigenvectors=config.k_eigenvectors,
+            src_lang=args.src_lang,
+            tgt_lang=args.tgt_lang,
             max_chunks=config.max_chunks,
         )
 

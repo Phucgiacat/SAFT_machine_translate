@@ -29,15 +29,18 @@ import numpy as np
 import torch
 from tqdm.auto import tqdm
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import sys, os
+current_dir = os.path.dirname(os.path.abspath(__file__))
+parent_dir = os.path.dirname(current_dir)
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import PeftModel
 
-from saft_model import SAFTModel
-from saft_config import get_config, BRAND_CONFIGS
-from saft_dataset import (
-    SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
+from saft.model import SAFTModel
+from saft.config import get_config, BRAND_CONFIGS
+from saft.dataset import (
     set_chat_format, fmt,
 )
 
@@ -51,7 +54,7 @@ def read_lines(path):
 # PE-aligned prompt builder (shared logic with saft_train.py)
 # ─────────────────────────────────────────────────────────
 
-def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenvectors=20):
+def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length, k_eigenvectors=20, src_lang="en", tgt_lang="vi"):
     """
     Build an eval prompt with aligned PE tensors for a single sample.
     Tokenizes parts separately so AMR labels are bijectively aligned to PE vectors.
@@ -61,17 +64,28 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenv
     pe_dim = 2 * k_eigenvectors
     labels_list = pe_info['labels']
     label_pes = pe_info['label_pes']
+    
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
+    system_msg = (
+        f"You are an expert {src}-to-{tgt} translation assistant. "
+        "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+        f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+    )
 
     # Tokenize structural parts (format-aware)
+    from saft.dataset import fmt
     f = fmt()
     prefix_text = (
-        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+        f"{f['sys_start']}{system_msg}{f['sys_end']}"
         f"{f['user_start']}AMR Graph:\n"
     )
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\nEnglish: {vi_text}\nVietnamese:{f['user_end']}"
+        f"\n\n{src}: {src_text}\n{tgt}:{f['user_end']}"
         f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)
@@ -150,7 +164,7 @@ def _build_eval_prompt_with_pe(tokenizer, vi_text, pe_info, max_length, k_eigenv
 def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                            pe_data=None, mode="baseline", batch_size=16,
                            max_new_tokens=256, num_beams=4, max_seq=1280,
-                           k_eigenvectors=20):
+                           k_eigenvectors=20, src_lang="en", tgt_lang="vi"):
     """Generate translations for all samples. Supports PE injection for SAFT mode."""
     model.eval()
     device = next(model.parameters()).device
@@ -171,15 +185,24 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                 pe_info = pe_data[j] if j < len(pe_data) else None
                 if pe_info is not None:
                     ids, pe, intra, mask = _build_eval_prompt_with_pe(
-                        tokenizer, vi_texts[j], pe_info, max_seq, k_eigenvectors
+                        tokenizer, vi_texts[j], pe_info, max_seq, k_eigenvectors, src_lang, tgt_lang
                     )
                 else:
                     # Fallback: no PE for this sample
+                    from saft.dataset import fmt
                     f = fmt()
+                    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+                    src = lang_map.get(src_lang, src_lang)
+                    tgt = lang_map.get(tgt_lang, tgt_lang)
+                    system_msg = (
+                        f"You are an expert {src}-to-{tgt} translation assistant. "
+                        "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+                        f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+                    )
                     prompt = (
-                        f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                        f"{f['sys_start']}{system_msg}{f['sys_end']}"
                         f"{f['user_start']}AMR Graph:\n{amr_texts[j] if amr_texts else ''}\n\n"
-                        f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                        f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
                         f"{f['asst_start']}"
                     )
                     tok_ids = tokenizer.encode(prompt, add_special_tokens=False)[:max_seq]
@@ -240,19 +263,30 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
         else:
             # ── Baseline / no-PE path ──
             prompts = []
+            lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+            src = lang_map.get(src_lang, src_lang)
+            tgt = lang_map.get(tgt_lang, tgt_lang)
+            
             for j in range(bs_start, bs_end):
                 if mode == "saft" and amr_texts:
+                    from saft.dataset import fmt
                     f = fmt()
-                    p = (f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+                    system_msg = (
+                        f"You are an expert {src}-to-{tgt} translation assistant. "
+                        "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+                        f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+                    )
+                    p = (f"{f['sys_start']}{system_msg}{f['sys_end']}"
                          f"{f['user_start']}AMR Graph:\n{amr_texts[j]}\n\n"
-                         f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                         f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
                          f"{f['asst_start']}")
                 else:
+                    from saft.dataset import fmt
                     f = fmt()
-                    p = (f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
+                    p = (f"{f['sys_start']}You are a helpful translation assistant.{f['sys_end']}"
                          f"{f['user_start']}"
-                         f"Translate the source text from English to Vietnamese.\n"
-                         f"English: {vi_texts[j]}\nVietnamese:{f['user_end']}"
+                         f"Translate the source text from {src} to {tgt}.\n"
+                         f"{src}: {vi_texts[j]}\n{tgt}:{f['user_end']}"
                          f"{f['asst_start']}")
                 prompts.append(p)
 
@@ -280,23 +314,34 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
 
 @torch.no_grad()
 def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
-                     num_beams=4, max_new_tokens=256):
-    """Translate a single English sentence to Vietnamese."""
+                     num_beams=4, max_new_tokens=256, src_lang="en", tgt_lang="vi"):
+    """Translate a single sentence."""
     model.eval()
     device = next(model.parameters()).device
 
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+
     if mode == "saft" and amr_text:
+        from saft.dataset import fmt
         f = fmt()
-        prompt = (f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+        system_msg = (
+            f"You are an expert {src}-to-{tgt} translation assistant. "
+            "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+            f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+        )
+        prompt = (f"{f['sys_start']}{system_msg}{f['sys_end']}"
                   f"{f['user_start']}AMR Graph:\n{amr_text}\n\n"
-                  f"English: {vi_text}\nVietnamese:{f['user_end']}"
+                  f"{src}: {vi_text}\n{tgt}:{f['user_end']}"
                   f"{f['asst_start']}")
     else:
+        from saft.dataset import fmt
         f = fmt()
-        prompt = (f"{f['sys_start']}{SYSTEM_MSG_BASELINE}{f['sys_end']}"
+        prompt = (f"{f['sys_start']}You are a helpful translation assistant.{f['sys_end']}"
                   f"{f['user_start']}"
-                  f"Translate the source text from English to Vietnamese.\n"
-                  f"English: {vi_text}\nVietnamese:{f['user_end']}"
+                  f"Translate the source text from {src} to {tgt}.\n"
+                  f"{src}: {vi_text}\n{tgt}:{f['user_end']}"
                   f"{f['asst_start']}")
 
     is_saft_model = isinstance(model, SAFTModel)
@@ -314,17 +359,17 @@ def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
     return tokenizer.decode(outputs[0][input_len:], skip_special_tokens=True).strip()
 
 
-def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
+def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens, src_lang="en", tgt_lang="vi"):
     """Interactive translation loop."""
     print(f"\n{'='*50}")
     print(f"  Interactive Translation (mode={mode})")
-    print(f"  Type English text, press Enter to translate.")
+    print(f"  Type text, press Enter to translate.")
     print(f"  Type 'quit' or Ctrl+C to exit.")
     print(f"{'='*50}\n")
 
     while True:
         try:
-            vi_text = input("🇬🇧 English: ").strip()
+            vi_text = input(f"{src_lang.upper()} Source: ").strip()
             if not vi_text or vi_text.lower() in ('quit', 'exit', 'q'):
                 print("Bye!")
                 break
@@ -336,8 +381,8 @@ def interactive_loop(model, tokenizer, mode, num_beams, max_new_tokens):
                     amr_text = amr_input
 
             translation = translate_single(model, tokenizer, vi_text, amr_text,
-                                           mode, num_beams, max_new_tokens)
-            print(f"🇻🇳 Vietnamese: {translation}\n")
+                                           mode, num_beams, max_new_tokens, src_lang, tgt_lang)
+            print(f"{tgt_lang.upper()} Translation: {translation}\n")
 
         except KeyboardInterrupt:
             print("\nBye!")
@@ -412,11 +457,13 @@ def main():
     parser.add_argument('--max-seq', type=int, default=1280, help='Max sequence length')
     parser.add_argument('--split', default='tst2013', help='Test split name')
     parser.add_argument('--translate', type=str, default=None,
-                        help='Translate a single English sentence')
+                        help='Translate a single sentence')
     parser.add_argument('--amr', type=str, default=None,
                         help='AMR text for --translate (SAFT mode)')
     parser.add_argument('--interactive', action='store_true',
                         help='Start interactive translation mode')
+    parser.add_argument('--in', dest='src_lang', default='en', help='Source language code (default: en)')
+    parser.add_argument('--out', dest='tgt_lang', default='vi', help='Target language code (default: vi)')
     args = parser.parse_args()
 
     # Get config for PE dimensions
@@ -439,15 +486,15 @@ def main():
     # ── Single sentence translation ──
     if args.translate:
         result = translate_single(model, tokenizer, args.translate, args.amr,
-                                   args.mode, args.num_beams, args.max_new_tokens)
-        print(f"\n🇬🇧 English: {args.translate}")
+                                   args.mode, args.num_beams, args.max_new_tokens, args.src_lang, args.tgt_lang)
+        print(f"\n{args.src_lang.upper()} Source: {args.translate}")
         if args.amr: print(f"📊 AMR:        {args.amr}")
-        print(f"🇻🇳 Vietnamese: {result}")
+        print(f"{args.tgt_lang.upper()} Translation: {result}")
         return
 
     # ── Interactive mode ──
     if args.interactive:
-        interactive_loop(model, tokenizer, args.mode, args.num_beams, args.max_new_tokens)
+        interactive_loop(model, tokenizer, args.mode, args.num_beams, args.max_new_tokens, args.src_lang, args.tgt_lang)
         return
 
     # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
@@ -486,7 +533,9 @@ def main():
         max_new_tokens=args.max_new_tokens,
         num_beams=args.num_beams,
         max_seq=args.max_seq,
-        k_eigenvectors=k_eigenvectors,
+        k_eigenvectors=config.k_eigenvectors,
+        src_lang=args.src_lang,
+        tgt_lang=args.tgt_lang,
     )
 
     # ── BLEU ──

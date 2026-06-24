@@ -56,26 +56,39 @@ def fmt():
         }
 
 
-SYSTEM_MSG_SAFT = (
-    "You are an expert English-to-Vietnamese translation assistant. "
-    "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
-    "Use the AMR as a semantic blueprint to produce an accurate, fluent Vietnamese translation."
-)
+def get_system_msg_saft(src_lang="en", tgt_lang="vi"):
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    return (
+        f"You are an expert {src}-to-{tgt} translation assistant. "
+        "You are given an Abstract Meaning Representation (AMR) graph of the source sentence. "
+        f"Use the AMR as a semantic blueprint to produce an accurate, fluent {tgt} translation."
+    )
 
-SYSTEM_MSG_BASELINE = "You are a helpful translation assistant."
+def get_system_msg_baseline():
+    return "You are a helpful translation assistant."
 
 
-def build_saft_prompt_parts(vi_text: str, amr_text: str, en_text: str = None):
+def build_saft_prompt_parts(vi_text: str, amr_text: str, en_text: str = None, src_lang="en", tgt_lang="vi"):
     """Build prompt parts for SAFT mode. Returns (system, user_before_amr, amr, user_after_amr, assistant)."""
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
     user_before = "AMR Graph:\n"
-    user_after = f"\n\nEnglish: {vi_text}\nVietnamese:"
-    return SYSTEM_MSG_SAFT, user_before, amr_text, user_after, en_text
+    user_after = f"\n\n{src}: {vi_text}\n{tgt}:"
+    return get_system_msg_saft(src_lang, tgt_lang), user_before, amr_text, user_after, en_text
 
 
-def build_baseline_prompt_parts(vi_text: str, en_text: str = None):
+def build_baseline_prompt_parts(vi_text: str, en_text: str = None, src_lang="en", tgt_lang="vi"):
     """Build prompt parts for Baseline mode. Returns (system, user_content, assistant)."""
-    user_content = f"Translate the source text from English to Vietnamese.\nEnglish: {vi_text}\nVietnamese:"
-    return SYSTEM_MSG_BASELINE, user_content, en_text
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
+    user_content = f"Translate the source text from {src} to {tgt}.\n{src}: {vi_text}\n{tgt}:"
+    return get_system_msg_baseline(), user_content, en_text
 
 
 # ─────────────────────────────────────────────────────────
@@ -221,19 +234,25 @@ def tokenize_baseline(
     vi_text: str,
     en_text: str,
     max_seq_length: int = 1280,
+    src_lang="en",
+    tgt_lang="vi"
 ) -> Dict:
     """Tokenize baseline prompt (no AMR, no PE)."""
-    system, user_content, assistant = build_baseline_prompt_parts(vi_text, en_text)
+    system, user_content, assistant = build_baseline_prompt_parts(vi_text, en_text, src_lang, tgt_lang)
 
+    lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+    src = lang_map.get(src_lang, src_lang)
+    tgt = lang_map.get(tgt_lang, tgt_lang)
+    
     # Tokenize in parts for smart truncation (format-aware)
     f = fmt()
     struct_prefix = (
         f"{f['sys_start']}{system}{f['sys_end']}"
         f"{f['user_start']}"
-        f"Translate the source text from English to Vietnamese.\n"
-        f"English: "
+        f"Translate the source text from {src} to {tgt}.\n"
+        f"{src}: "
     )
-    struct_suffix = f"\nVietnamese:{f['user_end']}{f['asst_start']}"
+    struct_suffix = f"\n{tgt}:{f['user_end']}{f['asst_start']}"
 
     prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
     vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
@@ -368,11 +387,15 @@ class SAFTDataset(Dataset):
         max_seq_length: int = 1280,
         k_eigenvectors: int = 20,
         max_chunks: int = 3,
+        src_lang="en",
+        tgt_lang="vi"
     ):
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
         self.pe_dim = 2 * k_eigenvectors
         self.max_chunks = max_chunks
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
 
         # Load text data
         with open(vi_file, 'r', encoding='utf-8') as f:
@@ -402,10 +425,14 @@ class SAFTDataset(Dataset):
 
         # Estimate fixed overhead (system + user structure + suffix + closing)
         f = fmt()
+        lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+        src = lang_map.get(src_lang, src_lang)
+        tgt = lang_map.get(tgt_lang, tgt_lang)
+        
         overhead_text = (
-            f"{f['sys_start']}{SYSTEM_MSG_SAFT}{f['sys_end']}"
+            f"{f['sys_start']}{get_system_msg_saft(src_lang, tgt_lang)}{f['sys_end']}"
             f"{f['user_start']}AMR Graph:\n\n\n"
-            f"English: \nVietnamese:{f['user_end']}"
+            f"{src}: \n{tgt}:{f['user_end']}"
             f"{f['asst_start']}{f['asst_end']}"
         )
         self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
@@ -429,15 +456,19 @@ class SAFTDataset(Dataset):
         estimated_amr = len(labels_list) * 2  # rough: ~2 tokens per label
         estimated_total = self._fixed_overhead + vi_token_len + resp_len + estimated_amr
 
+        lang_map = {'en': 'English', 'vi': 'Vietnamese'}
+        src = lang_map.get(self.src_lang, self.src_lang)
+        tgt = lang_map.get(self.tgt_lang, self.tgt_lang)
+
         if estimated_total <= self.max_seq_length:
             # Fits in one sample — no chunking needed
             result = tokenize_with_amr_alignment(
                 tokenizer=self.tokenizer,
-                system_msg=SYSTEM_MSG_SAFT,
+                system_msg=get_system_msg_saft(self.src_lang, self.tgt_lang),
                 user_before_amr="AMR Graph:\n",
                 amr_labels=labels_list,
                 label_pes=label_pes,
-                user_after_amr=f"\n\nEnglish: {vi}\nVietnamese:",
+                user_after_amr=f"\n\n{src}: {vi}\n{tgt}:",
                 en_text=en,
                 max_seq_length=self.max_seq_length,
                 pe_dim=self.pe_dim,
@@ -458,11 +489,11 @@ class SAFTDataset(Dataset):
         for chunk_labels, chunk_pes in chunks:
             result = tokenize_with_amr_alignment(
                 tokenizer=self.tokenizer,
-                system_msg=SYSTEM_MSG_SAFT,
+                system_msg=get_system_msg_saft(self.src_lang, self.tgt_lang),
                 user_before_amr="AMR Graph:\n",
                 amr_labels=list(chunk_labels),
                 label_pes=chunk_pes,
-                user_after_amr=f"\n\nEnglish: {vi}\nVietnamese:",
+                user_after_amr=f"\n\n{src}: {vi}\n{tgt}:",
                 en_text=en,
                 max_seq_length=self.max_seq_length,
                 pe_dim=self.pe_dim,
@@ -480,10 +511,14 @@ class BaselineDataset(Dataset):
         vi_file: str,
         en_file: str,
         tokenizer,
-        max_seq_length: int = 768,
+        max_seq_length: int = 1280,
+        src_lang="en",
+        tgt_lang="vi"
     ):
         self.tokenizer = tokenizer
         self.max_seq_length = max_seq_length
+        self.src_lang = src_lang
+        self.tgt_lang = tgt_lang
 
         with open(vi_file, 'r', encoding='utf-8') as f:
             self.vi_texts = [l.strip() for l in f]
@@ -502,7 +537,7 @@ class BaselineDataset(Dataset):
     def __getitem__(self, idx):
         result = tokenize_baseline(
             self.tokenizer, self.vi_texts[idx], self.en_texts[idx],
-            self.max_seq_length,
+            self.max_seq_length, self.src_lang, self.tgt_lang
         )
         return [result]
 

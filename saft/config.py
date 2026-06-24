@@ -152,6 +152,27 @@ class Gemma2BConfig(BaseConfig):
     output_dir = "/content/drive/MyDrive/output_Gemma2-2B-en2vi"
 
 
+class Qwen25AncientConfig(BaseConfig):
+    """
+    Qwen2.5-7B-Instruct configuration optimized for Ancient Vietnamese.
+    - Used for training with dictionary-enriched AMR graphs.
+    - Increases max_seq to handle added English glosses.
+    - Decreases batch size to avoid OOM with longer sequences.
+    """
+    brand = "qwen2.5-ancient"
+    model_name = "Qwen/Qwen2.5-7B-Instruct"
+    dtype = "bf16"
+
+    # Batch — Increase sequence length for gloss injection, reduce batch size for 7B
+    baseline_max_seq = 768
+    saft_max_seq = 1536  # Increased for [english_gloss] injection
+    baseline_batch_size = 4
+    saft_batch_size = 2
+
+    # Default output
+    output_dir = "/content/drive/MyDrive/output_Qwen2.5-7B-Ancient"
+
+
 # ── Registry ──
 BRAND_CONFIGS = {
     "qwen3": Qwen3Config,
@@ -159,6 +180,7 @@ BRAND_CONFIGS = {
     "qwen2.5-0.5b": Qwen25Config,       # alias
     "qwen2.5-1.5b": Qwen25_1_5BConfig,
     "gemma-2b": Gemma2BConfig,
+    "qwen2.5-ancient": Qwen25AncientConfig,
 }
 
 
