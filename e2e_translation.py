@@ -176,6 +176,7 @@ def main():
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
     parser.add_argument('--base-model', type=str, default=None, help='Override base model name from config (e.g., Qwen/Qwen2.5-7B-Instruct)')
     parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
+    parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMR parser checkpoint (default: phucgiacat/AMRBART-parser-grpo from HuggingFace)')
     parser.add_argument('--translate', type=str, default=None, help='Vietnamese sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
     args = parser.parse_args()
@@ -276,7 +277,8 @@ def main():
         print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
         return
 
-    amr_model_name = "phucgiacat/AMRBART-parser-grpo"
+    amr_model_name = args.amr_checkpoint if args.amr_checkpoint else "phucgiacat/AMRBART-parser-grpo"
+    print(f"    Loading AMR model from: {amr_model_name}")
     amr_tokenizer = AMRBartTokenizer.from_pretrained(amr_model_name)
     amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
     amr_model.eval()
