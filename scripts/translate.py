@@ -150,7 +150,58 @@ def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length, k_eigen
     )
 
 
-def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True):
+def get_dependency_mask(segmented_snt, tokenizer, phonlp_model, max_src_length=1024):
+    words = segmented_snt.split()
+    n = len(words)
+    word_matrix = [[0] * n for _ in range(n)]
+    for i in range(n):
+        word_matrix[i][i] = 1
+        
+    if phonlp_model and n > 0:
+        try:
+            annotations = phonlp_model.annotate(segmented_snt)
+            if len(annotations[0]) > 0:
+                deps = annotations[3][0]
+                if len(deps) == n:
+                    for i, (head_idx, rel) in enumerate(deps):
+                        head_idx = int(head_idx)
+                        if head_idx > 0:
+                            word_matrix[i][head_idx - 1] = 1
+                            word_matrix[head_idx - 1][i] = 1
+        except Exception:
+            pass
+
+    subword_to_word = []
+    for w_idx, word in enumerate(words):
+        prefix = " " if w_idx > 0 else ""
+        tokens = tokenizer.tokenize(prefix + word)
+        subword_to_word.extend([w_idx] * len(tokens))
+        
+    n_subwords = len(subword_to_word)
+    sub_matrix = [[0] * n_subwords for _ in range(n_subwords)]
+    if len(word_matrix) == n:
+        for sw_i in range(n_subwords):
+            for sw_j in range(n_subwords):
+                w_i = subword_to_word[sw_i]
+                w_j = subword_to_word[sw_j]
+                if w_i < n and w_j < n:
+                    sub_matrix[sw_i][sw_j] = word_matrix[w_i][w_j]
+                    
+    tokenized_txt = tokenizer(segmented_snt, max_length=max_src_length, padding=False, truncation=True)
+    r_ids = tokenized_txt["input_ids"]
+    
+    final_len = len(r_ids)
+    final_matrix = [[0] * final_len for _ in range(final_len)]
+    
+    for sw_i in range(min(n_subwords, final_len - 2)):
+        for sw_j in range(min(n_subwords, final_len - 2)):
+            final_matrix[sw_i + 1][sw_j + 1] = sub_matrix[sw_i][sw_j]
+            
+    import torch
+    return torch.tensor([final_matrix], dtype=torch.float32)
+
+
+def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True, phonlp_model=None):
     """Parse a Vietnamese sentence into a Penman AMR string using AMRBART.
     Includes Beam-search fallback and Semantic Concept Injection.
     """
@@ -161,12 +212,17 @@ def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cac
     import penman
     input_ids = amr_tokenizer.encode(text, return_tensors="pt").to(device)
     
+    dependency_mask = None
+    if phonlp_model is not None:
+        dependency_mask = get_dependency_mask(text, amr_tokenizer, phonlp_model).to(device)
+    
     with torch.cuda.amp.autocast(enabled=device != "cpu"):
         outputs = amr_model.generate(
             input_ids, 
             max_length=1024, 
             num_beams=num_beams,
-            num_return_sequences=num_beams # Enable returning all beams for fallback
+            num_return_sequences=num_beams, # Enable returning all beams for fallback
+            dependency_mask=dependency_mask
         )
     
     valid_graph = None
@@ -428,6 +484,19 @@ def main():
     model, tokenizer = load_model(args.model_path, config=config, mode="saft")
     model.eval()
     
+    # 3.5 Load PhoNLP for dependency matrix if vi
+    phonlp_model = None
+    if args.src_lang == 'vi':
+        print("\nLoading PhoNLP for Dependency-aware AMR Parsing...")
+        try:
+            import phonlp
+            if not os.path.exists('./phonlp'):
+                phonlp.download(save_dir='./phonlp')
+            phonlp_model = phonlp.load(save_dir='./phonlp')
+            print("    ✓ PhoNLP loaded")
+        except ImportError:
+            print("    [WARN] phonlp not installed. AMR parsing might degrade.")
+    
     # 4. Load Dictionary for Enrichment
     from saft.amr.dictionary import SAFTDictionary
     saft_dict = SAFTDictionary()
@@ -460,7 +529,7 @@ def main():
         cached = segmented_text in _amr_cache
         penman_amr = parse_vi_to_amr(
             segmented_text, amr_model, amr_tokenizer, device,
-            num_beams=amr_num_beams, use_cache=True
+            num_beams=amr_num_beams, use_cache=True, phonlp_model=phonlp_model
         )
         print(f"    Raw AMR: {penman_amr}")
         print(f"    ⏱ {time.time() - t1:.2f}s" + (" (cached)" if cached else ""))
