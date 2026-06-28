@@ -74,10 +74,15 @@ class AmrPEProjection(nn.Module):
         self._init_weights()
 
     def _init_weights(self):
-        for m in self.net:
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight, gain=0.1)
-                nn.init.zeros_(m.bias)
+        # First layer: small random weights
+        nn.init.xavier_uniform_(self.net[0].weight, gain=0.1)
+        nn.init.zeros_(self.net[0].bias)
+        
+        # Second (final) layer: EXACTLY ZERO
+        # This ensures amr_pe is 0 at the start of training,
+        # preventing it from destroying the pretrained LLM embeddings.
+        nn.init.zeros_(self.net[2].weight)
+        nn.init.zeros_(self.net[2].bias)
 
     def forward(
         self,
