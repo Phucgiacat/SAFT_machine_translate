@@ -18,7 +18,7 @@ Usage (Colab / script):
 HƯỚNG DẪN: Chạy trên Colab với L4 GPU.
   1. Upload thư mục SAFT lên Colab
   2. pip install transformers peft accelerate sacrebleu tqdm matplotlib
-  3. (Optional) pip install pytorch-lightning==2.1.0 unbabel-comet==2.2.2
+  3. (Optional) pip install --upgrade unbabel-comet
   4. python saft_bfs_linearize.py --data-dir data
   5. python saft_pe_precompute.py --data-dir data
   6. python saft_train.py --track saft --data-dir data
@@ -399,7 +399,7 @@ def evaluate_comet(vi_texts, predictions, references, comet_model, n=None):
             {"src": src, "mt": mt, "ref": ref}
             for src, mt, ref in zip(vi_texts[:n], predictions[:n], references[:n])
         ]
-        output = comet_model.predict(data, batch_size=64, gpus=1)
+        output = comet_model.predict(data, batch_size=64)
         return output.system_score
     except Exception as e:
         print(f"  [WARN] COMET evaluation failed: {e}")
@@ -700,7 +700,7 @@ def main():
         print("COMET loaded: Unbabel/wmt22-comet-da")
     except ImportError:
         print("\n[INFO] unbabel-comet not installed. Using BLEU-only for evaluation.")
-        print("  To enable COMET: pip install pytorch-lightning==2.1.0 unbabel-comet==2.2.2")
+        print("  To enable COMET: pip install --upgrade unbabel-comet")
     except Exception as e:
         print(f"\n[WARN] Failed to load COMET: {e}")
         print("  Continuing with BLEU-only evaluation.")

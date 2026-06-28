@@ -554,7 +554,7 @@ def main():
         comet_model = load_from_checkpoint(comet_path)
         data = [{"src": s, "mt": m, "ref": r}
                 for s, m, r in zip(test_vi, predictions, test_en)]
-        output = comet_model.predict(data, batch_size=64, gpus=1)
+        output = comet_model.predict(data, batch_size=64)
         comet_score = output.system_score
         print(f"  COMET = {comet_score:.4f}")
     except ImportError:
