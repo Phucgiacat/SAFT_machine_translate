@@ -159,7 +159,7 @@ def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length, config,
     prefix_ids = tokenizer.encode(prefix_text, add_special_tokens=False)
 
     suffix_text = (
-        f"\n\n{src}: {src_text}\n{tgt}:{f['user_end']}"
+        f"\n\nTranslate the source text from {src} to {tgt}.\n{src}: {src_text}\n{tgt}:{f['user_end']}"
         f"{f['asst_start']}"
     )
     suffix_ids = tokenizer.encode(suffix_text, add_special_tokens=False)

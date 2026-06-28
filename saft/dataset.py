@@ -77,7 +77,7 @@ def build_saft_prompt_parts(vi_text: str, amr_text: str, en_text: str = None, sr
     tgt = lang_map.get(tgt_lang, tgt_lang)
     
     user_before = "AMR Graph:\n"
-    user_after = f"\n\n{src}: {vi_text}\n{tgt}:"
+    user_after = f"\n\nTranslate the source text from {src} to {tgt}.\n{src}: {vi_text}\n{tgt}:"
     return get_system_msg_saft(src_lang, tgt_lang), user_before, amr_text, user_after, en_text
 
 
@@ -468,7 +468,7 @@ class SAFTDataset(Dataset):
                 user_before_amr="AMR Graph:\n",
                 amr_labels=labels_list,
                 label_pes=label_pes,
-                user_after_amr=f"\n\n{src}: {vi}\n{tgt}:",
+                user_after_amr=f"\n\nTranslate the source text from {src} to {tgt}.\n{src}: {vi}\n{tgt}:",
                 en_text=en,
                 max_seq_length=self.max_seq_length,
                 pe_dim=self.pe_dim,
