@@ -21,9 +21,9 @@ from collections import deque
 from typing import List, Tuple, Dict, Optional
 
 import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from .parser import parse_penman_to_graph, read_amr_file
+from saft.amr.parser import parse_penman_to_graph, read_amr_file
 
 
 # ─────────────────────────────────────────────────────────

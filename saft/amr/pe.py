@@ -25,9 +25,9 @@ from tqdm import tqdm
 from typing import List, Dict, Optional
 
 import sys
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from .parser import (
+from saft.amr.parser import (
     build_spg_from_bfs_linear,
     compute_magnetic_laplacian,
     extract_spectral_features,
