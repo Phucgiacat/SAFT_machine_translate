@@ -776,8 +776,8 @@ def main():
 
         print("\nLoading Baseline Dataset...")
         train_ds = BaselineDataset(
-            vi_file=os.path.join(config.data_dir, "train.en"),
-            en_file=os.path.join(config.data_dir, "train.vi"),
+            vi_file=os.path.join(config.data_dir, f"train.{args.src_lang}"),
+            en_file=os.path.join(config.data_dir, f"train.{args.tgt_lang}"),
             tokenizer=tokenizer,
             max_seq_length=config.baseline_max_seq,
             src_lang=args.src_lang,
@@ -843,8 +843,8 @@ def main():
 
         print("\nLoading SAFT Dataset...")
         train_ds = SAFTDataset(
-            vi_file=os.path.join(config.data_dir, "train.en"),
-            en_file=os.path.join(config.data_dir, "train.vi"),
+            vi_file=os.path.join(config.data_dir, f"train.{args.src_lang}"),
+            en_file=os.path.join(config.data_dir, f"train.{args.tgt_lang}"),
             linear_amr_file=os.path.join(config.data_dir, "train.linear.amr"),
             pe_file=os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer=tokenizer,
