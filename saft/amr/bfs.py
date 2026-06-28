@@ -162,8 +162,8 @@ def linearize_split(
     for idx, (entry_id, snt, penman_str) in enumerate(entries):
         linear = bfs_linearize(penman_str)
         if linear is not None:
-            # Apply Dictionary Enrichment using the source sentence
-            enriched_linear = saft_dict.enrich_linear_amr(linear, snt)
+            # Apply Dictionary Enrichment
+            enriched_linear = saft_dict.enrich_linear_amr(linear)
             results.append(enriched_linear)
             stats['success'] += 1
         else:
