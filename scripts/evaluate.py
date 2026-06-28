@@ -467,8 +467,8 @@ def main():
                         help='AMR text for --translate (SAFT mode)')
     parser.add_argument('--interactive', action='store_true',
                         help='Start interactive translation mode')
-    parser.add_argument('--in', dest='src_lang', default='en', help='Source language code (default: en)')
-    parser.add_argument('--out', dest='tgt_lang', default='vi', help='Target language code (default: vi)')
+    parser.add_argument('--in', dest='src_lang', default='vi', help='Source language code (default: vi)')
+    parser.add_argument('--out', dest='tgt_lang', default='en', help='Target language code (default: en)')
     args = parser.parse_args()
 
     # Get config for PE dimensions
@@ -503,8 +503,8 @@ def main():
         return
 
     # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
-    test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))   # source
-    test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))   # target (reference)
+    test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.{args.src_lang}"))   # source
+    test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.{args.tgt_lang}"))   # target (reference)
     test_amr = None
     amr_path = os.path.join(args.data_dir, f"{args.split}.linear.amr")
     if not os.path.exists(amr_path):

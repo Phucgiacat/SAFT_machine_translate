@@ -672,8 +672,8 @@ def main():
     parser.add_argument('--model', default=None, help='Override model name')
     parser.add_argument('--resume', default=None,
                         help='Resume from a checkpoint directory')
-    parser.add_argument('--in', dest='src_lang', default='en', help='Source language code (default: en)')
-    parser.add_argument('--out', dest='tgt_lang', default='vi', help='Target language code (default: vi)')
+    parser.add_argument('--in', dest='src_lang', default='vi', help='Source language code (default: vi)')
+    parser.add_argument('--out', dest='tgt_lang', default='en', help='Target language code (default: en)')
     args = parser.parse_args()
 
     config = get_config(args.brand)
@@ -716,13 +716,13 @@ def main():
         with open(path, 'r', encoding='utf-8') as f:
             return [l.strip() for l in f]
 
-    # En→Vi: source=.en (loaded as vi_*), target=.vi (loaded as en_*)
-    train_vi = read_lines(os.path.join(config.data_dir, "train.en"))   # source
-    train_en = read_lines(os.path.join(config.data_dir, "train.vi"))   # target
-    val_vi = read_lines(os.path.join(config.data_dir, "tst2012.en"))   # source
-    val_en = read_lines(os.path.join(config.data_dir, "tst2012.vi"))   # target
-    test_vi = read_lines(os.path.join(config.data_dir, "tst2013.en"))  # source
-    test_en = read_lines(os.path.join(config.data_dir, "tst2013.vi"))  # target
+    # Load files based on source and target languages (variables named vi/en for legacy reasons)
+    train_vi = read_lines(os.path.join(config.data_dir, f"train.{args.src_lang}"))   # source
+    train_en = read_lines(os.path.join(config.data_dir, f"train.{args.tgt_lang}"))   # target
+    val_vi = read_lines(os.path.join(config.data_dir, f"tst2012.{args.src_lang}"))   # source
+    val_en = read_lines(os.path.join(config.data_dir, f"tst2012.{args.tgt_lang}"))   # target
+    test_vi = read_lines(os.path.join(config.data_dir, f"tst2013.{args.src_lang}"))  # source
+    test_en = read_lines(os.path.join(config.data_dir, f"tst2013.{args.tgt_lang}"))  # target
 
     train_amr, val_amr, test_amr = None, None, None
     if args.track in ('saft', 'both'):
