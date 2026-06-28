@@ -55,7 +55,7 @@ from saft.model import SAFTModel
 from saft.dataset import (
     SAFTDataset, BaselineDataset,
     saft_collate_fn, baseline_collate_fn,
-    fmt,
+    fmt, set_chat_format
 )
 from saft.config import get_config, BRAND_CONFIGS
 
