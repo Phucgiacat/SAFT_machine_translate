@@ -25,6 +25,11 @@ import argparse
 import warnings
 warnings.filterwarnings('ignore', category=FutureWarning)
 
+# Monkey-patch for Python 3.12 compatibility with older Lightning/COMET versions
+import pkgutil
+if not hasattr(pkgutil, 'ImpImporter'):
+    pkgutil.ImpImporter = type('ImpImporter', (object,), {})
+
 import numpy as np
 import torch
 from tqdm.auto import tqdm
