@@ -495,6 +495,23 @@ def train_track(
             epoch_loss += outputs.loss.item()
             num_batches += 1
 
+            # ── DEBUG: log grad-norm PE-MLP vs LoRA (bật bằng SAFT_DEBUG_GRAD=1) ──
+            # Kiểm chứng nguyên nhân #1: nếu grad của pe_projection nhỏ hơn LoRA
+            # nhiều bậc → MLP gần như không nhận tín hiệu học → PE bị bỏ qua.
+            if use_saft and os.environ.get("SAFT_DEBUG_GRAD") == "1" and batch_idx < 50:
+                mlp_gn = torch.sqrt(sum(
+                    p.grad.detach().float().pow(2).sum()
+                    for p in saft_model.pe_projection.parameters() if p.grad is not None
+                )).item() if any(p.grad is not None for p in saft_model.pe_projection.parameters()) else 0.0
+                lora_gn = torch.sqrt(sum(
+                    p.grad.detach().float().pow(2).sum()
+                    for n_, p in saft_model.base_model.named_parameters()
+                    if p.requires_grad and p.grad is not None
+                )).item()
+                ratio = mlp_gn / lora_gn if lora_gn > 0 else float('nan')
+                print(f"  [GRAD] step={batch_idx:3d}  ||g_MLP||={mlp_gn:.3e}  "
+                      f"||g_LoRA||={lora_gn:.3e}  MLP/LoRA={ratio:.4f}")
+
             # Free batch tensors early to reduce peak memory
             del input_ids, attention_mask, labels, outputs, loss
             if use_saft:
