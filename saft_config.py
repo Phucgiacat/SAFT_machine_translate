@@ -151,7 +151,7 @@ class Gemma2BConfig(BaseConfig):
     # Default output
     output_dir = "/content/drive/MyDrive/output_Gemma2-2B-en2vi"
 
-class Qwen25WeakBaselineConfig(BaseConfig):
+class Qwen25BaselineConfig(BaseConfig):
     """
     Deliberately weakened Qwen2.5-0.5B config for ablation study.
     Purpose: Create a lower-bound baseline to show SAFT improvement.
@@ -163,7 +163,7 @@ class Qwen25WeakBaselineConfig(BaseConfig):
     - Lower LR (5e-5 vs 2e-4) → slower convergence
     - No early stopping patience → trains exactly 2 epochs
     """
-    brand = "qwen2.5-weak"
+    brand = "qwen2.5-baseline"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
     dtype = "bf16"
 
@@ -186,7 +186,7 @@ class Qwen25WeakBaselineConfig(BaseConfig):
     saft_batch_size = 4
 
     # Default output
-    output_dir = "/content/drive/MyDrive/output_Qwen2.5-0.5B-weak"
+    output_dir = "/content/drive/MyDrive/output_Qwen2.5-0.5B-baseline"
 
 
 # ── Registry ──
@@ -195,7 +195,7 @@ BRAND_CONFIGS = {
     "qwen2.5": Qwen25Config,
     "qwen2.5-0.5b": Qwen25Config,       # alias
     "qwen2.5-1.5b": Qwen25_1_5BConfig,
-    "qwen2.5-weak": Qwen25WeakBaselineConfig,
+    "qwen2.5-baseline": Qwen25BaselineConfig,
     "gemma-2b": Gemma2BConfig,
 }
 
