@@ -482,7 +482,7 @@ def main():
         max_new_tokens=args.max_new_tokens,
         num_beams=args.num_beams,
         max_seq=args.max_seq,
-        k_eigenvectors=k_eigenvectors,
+        k_eigenvectors=config.k_eigenvectors,
     )
 
     # ── BLEU ──

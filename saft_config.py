@@ -169,7 +169,7 @@ class Qwen25BaselineConfig(BaseConfig):
     # Undertrained
     learning_rate = 2e-4
     num_epochs = 2
-    early_stop_patience = 10  # effectively disabled
+    early_stop_patience = 2  # effectively disabled
     gradient_accumulation = 2
 
     # Batch
@@ -190,25 +190,21 @@ class Qwen25_1_5BBaselineConfig(BaseConfig):
     model_name = "Qwen/Qwen2.5-1.5B-Instruct"
     dtype = "bf16"
 
-    # Weak LoRA
     lora_r = 4
     lora_alpha = 8
     lora_dropout = 0.1
-    lora_targets = ["q_proj", "v_proj"]
+    lora_targets = ["q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"]
 
-    # Undertrained
-    learning_rate = 5e-5
+    learning_rate = 2e-4
     num_epochs = 2
-    early_stop_patience = 99
+    early_stop_patience = 2
     gradient_accumulation = 2
 
-    # Batch — smaller for 1.5B model
     baseline_max_seq = 768
     saft_max_seq = 1024
     baseline_batch_size = 4
     saft_batch_size = 2
-
-    # Default output
     output_dir = "/content/drive/MyDrive/output_Qwen2.5-1.5B-baseline"
 
 
@@ -220,16 +216,15 @@ class Qwen3BaselineConfig(BaseConfig):
     model_name = "Qwen/Qwen3-0.6B"
     dtype = "bf16"
 
-    # Weak LoRA
     lora_r = 4
     lora_alpha = 8
     lora_dropout = 0.1
-    lora_targets = ["q_proj", "v_proj"]
+    lora_targets = ["q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"]
 
-    # Undertrained
-    learning_rate = 5e-5
+    learning_rate = 2e-4
     num_epochs = 2
-    early_stop_patience = 99
+    early_stop_patience = 2
     gradient_accumulation = 2
 
     # Batch
