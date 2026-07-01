@@ -163,12 +163,13 @@ class Qwen25BaselineConfig(BaseConfig):
     lora_r = 4
     lora_alpha = 8
     lora_dropout = 0.1
-    lora_targets = ["q_proj", "v_proj"]
+    lora_targets = ["q_proj", "k_proj", "v_proj", "o_proj",
+                    "gate_proj", "up_proj", "down_proj"]
 
     # Undertrained
-    learning_rate = 5e-5
+    learning_rate = 2e-4
     num_epochs = 2
-    early_stop_patience = 99  # effectively disabled
+    early_stop_patience = 10  # effectively disabled
     gradient_accumulation = 2
 
     # Batch
