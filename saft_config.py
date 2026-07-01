@@ -21,7 +21,7 @@ class BaseConfig:
     k_eigenvectors = 20
     sin_dim = 8
     sin_base = 1000.0
-    mlp_lr_multiplier = 1.0
+    mlp_lr_multiplier = 5.0  # Increased from 1.0 -> 5.0 to help the scratch-initialized MLP learn faster than LoRA
 
     # LoRA
     lora_r = 16
@@ -35,7 +35,7 @@ class BaseConfig:
     weight_decay = 0.01
     warmup_steps = 100
     num_epochs = 10
-    early_stop_patience = 2
+    early_stop_patience = 3  # Increased from 2 -> 3 to prevent premature stopping
     gradient_accumulation = 8
 
     # AMR chunking
