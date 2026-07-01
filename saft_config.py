@@ -154,14 +154,6 @@ class Gemma2BConfig(BaseConfig):
 class Qwen25BaselineConfig(BaseConfig):
     """
     Deliberately weakened Qwen2.5-0.5B config for ablation study.
-    Purpose: Create a lower-bound baseline to show SAFT improvement.
-
-    Differences from full Qwen25Config:
-    - LoRA rank 4 (vs 16) → 4× fewer trainable params
-    - Only 2 LoRA targets (vs 7) → ~70% fewer adapted modules
-    - 2 epochs (vs 10) → undertrained
-    - Lower LR (5e-5 vs 2e-4) → slower convergence
-    - No early stopping patience → trains exactly 2 epochs
     """
     brand = "qwen2.5-baseline"
     model_name = "Qwen/Qwen2.5-0.5B-Instruct"
@@ -189,13 +181,75 @@ class Qwen25BaselineConfig(BaseConfig):
     output_dir = "/content/drive/MyDrive/output_Qwen2.5-0.5B-baseline"
 
 
+class Qwen25_1_5BBaselineConfig(BaseConfig):
+    """
+    Deliberately weakened Qwen2.5-1.5B config for ablation study.
+    """
+    brand = "qwen2.5-1.5b-baseline"
+    model_name = "Qwen/Qwen2.5-1.5B-Instruct"
+    dtype = "bf16"
+
+    # Weak LoRA
+    lora_r = 4
+    lora_alpha = 8
+    lora_dropout = 0.1
+    lora_targets = ["q_proj", "v_proj"]
+
+    # Undertrained
+    learning_rate = 5e-5
+    num_epochs = 2
+    early_stop_patience = 99
+    gradient_accumulation = 2
+
+    # Batch — smaller for 1.5B model
+    baseline_max_seq = 768
+    saft_max_seq = 1024
+    baseline_batch_size = 4
+    saft_batch_size = 2
+
+    # Default output
+    output_dir = "/content/drive/MyDrive/output_Qwen2.5-1.5B-baseline"
+
+
+class Qwen3BaselineConfig(BaseConfig):
+    """
+    Deliberately weakened Qwen3-0.6B config for ablation study.
+    """
+    brand = "qwen3-baseline"
+    model_name = "Qwen/Qwen3-0.6B"
+    dtype = "bf16"
+
+    # Weak LoRA
+    lora_r = 4
+    lora_alpha = 8
+    lora_dropout = 0.1
+    lora_targets = ["q_proj", "v_proj"]
+
+    # Undertrained
+    learning_rate = 5e-5
+    num_epochs = 2
+    early_stop_patience = 99
+    gradient_accumulation = 2
+
+    # Batch
+    baseline_max_seq = 768
+    saft_max_seq = 1280
+    baseline_batch_size = 8
+    saft_batch_size = 4
+
+    # Default output
+    output_dir = "/content/drive/MyDrive/output_Qwen3-0.6B-baseline"
+
+
 # ── Registry ──
 BRAND_CONFIGS = {
     "qwen3": Qwen3Config,
+    "qwen3-baseline": Qwen3BaselineConfig,
     "qwen2.5": Qwen25Config,
     "qwen2.5-0.5b": Qwen25Config,       # alias
     "qwen2.5-1.5b": Qwen25_1_5BConfig,
     "qwen2.5-baseline": Qwen25BaselineConfig,
+    "qwen2.5-1.5b-baseline": Qwen25_1_5BBaselineConfig,
     "gemma-2b": Gemma2BConfig,
 }
 
