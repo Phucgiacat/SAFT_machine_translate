@@ -242,45 +242,78 @@ def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cac
     return result
 
 
-def parse_en_to_amr(text, en_amr_venv, en_amr_model, en_amr_repo, use_cache=True):
-    """Parse an English sentence into a Penman AMR string using IBM transition-amr-parser.
+class EnAMRServer:
+    """Persistent subprocess server for English AMR parsing.
 
-    Calls the parser via subprocess using the Python 3.8 venv created by setup_phuc.sh,
-    since IBM transition-amr-parser requires Python 3.8 + fairseq==0.10.2 + torch 1.13.
+    Spawns a Python 3.8 subprocess that loads the IBM transition-amr-parser model
+    once, then accepts sentences via stdin and returns AMR graphs via stdout.
+    This avoids the ~2min model reload on every parse call.
+    """
+
+    DELIMITER = '<<<AMR_END>>>'
+
+    def __init__(self, python_bin, helper_script, en_amr_repo):
+        import subprocess
+        self.process = subprocess.Popen(
+            [python_bin, helper_script],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=en_amr_repo,
+            bufsize=1,  # line-buffered
+        )
+        # Wait for "READY" signal from the server
+        ready_line = self.process.stdout.readline().strip()
+        if ready_line != 'READY':
+            stderr = self.process.stderr.read()
+            raise RuntimeError(f"AMR server failed to start. Got: {ready_line}\nStderr: {stderr}")
+
+    def parse(self, text):
+        """Send a sentence and receive its AMR graph."""
+        # Send sentence (single line)
+        self.process.stdin.write(text.strip() + '\n')
+        self.process.stdin.flush()
+
+        # Read AMR output until delimiter
+        lines = []
+        while True:
+            line = self.process.stdout.readline()
+            if not line:  # EOF — process died
+                stderr = self.process.stderr.read()
+                raise RuntimeError(f"AMR server died unexpectedly. Stderr: {stderr}")
+            line = line.rstrip('\n')
+            if line == self.DELIMITER:
+                break
+            lines.append(line)
+        return '\n'.join(lines).strip()
+
+    def close(self):
+        if self.process and self.process.poll() is None:
+            self.process.stdin.write('__EXIT__\n')
+            self.process.stdin.flush()
+            self.process.wait(timeout=10)
+
+
+def parse_en_to_amr(text, en_amr_server, use_cache=True):
+    """Parse an English sentence into AMR using the persistent EnAMRServer.
 
     Args:
         text: Input English text
-        en_amr_venv: Path to Python 3.8 venv (e.g. /content/transition-amr-parser/.venv)
-        en_amr_model: Model name (e.g. AMR3-structbart-L)
-        en_amr_repo: Path to the cloned transition-amr-parser repo
-        use_cache: if True, cache results to avoid re-parsing identical sentences
+        en_amr_server: running EnAMRServer instance
+        use_cache: if True, cache results to avoid re-parsing
     """
-    import subprocess
     global _amr_cache
 
-    # Check cache first
     if use_cache and text in _amr_cache:
         return _amr_cache.get(text)
 
-    python_bin = os.path.join(en_amr_venv, 'bin', 'python')
-    helper_script = os.path.join(en_amr_repo, '_amr_parse_helper.py')
+    result = en_amr_server.parse(text)
 
-    result = subprocess.run(
-        [python_bin, helper_script, '--model', en_amr_model, '--text', text],
-        capture_output=True, text=True, cwd=en_amr_repo,
-        timeout=120
-    )
-
-    if result.returncode != 0:
-        raise RuntimeError(f"AMR parsing failed: {result.stderr.strip()}")
-
-    amr_output = result.stdout.strip()
-
-    # Store in cache
     if use_cache:
-        _amr_cache.put(text, amr_output)
+        _amr_cache.put(text, result)
 
-    return amr_output
+    return result
 
 
 # ─────────────────────────────────────────────────────────
@@ -502,12 +535,12 @@ def main():
         print(f"    AMR beams: {amr_num_beams}")
 
     else:
-        # ── En→Vi: Setup IBM transition-amr-parser via subprocess (Python 3.8 venv) ──
+        # ── En→Vi: Setup IBM transition-amr-parser via persistent subprocess (Python 3.8 venv) ──
         en_amr_repo = os.path.abspath(args.en_amr_repo)
         en_amr_venv = args.en_amr_venv if args.en_amr_venv else os.path.join(en_amr_repo, '.venv')
         en_amr_model = args.en_amr_model
 
-        print(f"\nSetting up IBM transition-amr-parser (English, subprocess)...")
+        print(f"\nSetting up IBM transition-amr-parser (English, persistent subprocess)...")
         print(f"    Repo:  {en_amr_repo}")
         print(f"    Venv:  {en_amr_venv}")
         print(f"    Model: {en_amr_model}")
@@ -522,12 +555,11 @@ def main():
             print(f"    3. bash setup_phuc.sh")
             return
 
-        # Create helper script for subprocess AMR parsing
-        helper_script = os.path.join(en_amr_repo, '_amr_parse_helper.py')
+        # Create server-mode helper script
+        helper_script = os.path.join(en_amr_repo, '_amr_parse_server.py')
         with open(helper_script, 'w') as f:
             f.write('''#!/usr/bin/env python
-"""Helper script for AMR parsing via subprocess. Called by e2e_translation.py."""
-import argparse
+"""Persistent AMR parsing server. Loads model once, reads sentences from stdin."""
 import sys
 import os
 
@@ -536,37 +568,59 @@ src_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'src')
 if src_dir not in sys.path:
     sys.path.insert(0, src_dir)
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument('--model', required=True)
-    parser.add_argument('--text', required=True)
-    args = parser.parse_args()
+DELIMITER = '<<<AMR_END>>>'
+MODEL_NAME = sys.argv[1] if len(sys.argv) > 1 else 'AMR3-structbart-L'
 
-    from transition_amr_parser.parse import AMRParser
-    parser_amr = AMRParser.from_pretrained(args.model)
-    tokens, positions = parser_amr.tokenize(args.text)
-    annotations, machines = parser_amr.parse_sentence(tokens)
-    amr = machines.get_amr()
-    penman_str = amr.to_penman(jamr=False, isi=True)
-    print(penman_str)
+# Load model once
+from transition_amr_parser.parse import AMRParser
+parser = AMRParser.from_pretrained(MODEL_NAME)
 
-if __name__ == "__main__":
-    main()
+# Signal ready
+print('READY', flush=True)
+
+# Read sentences from stdin, one per line
+for line in sys.stdin:
+    sentence = line.strip()
+    if sentence == '__EXIT__':
+        break
+    if not sentence:
+        print(DELIMITER, flush=True)
+        continue
+    try:
+        tokens, positions = parser.tokenize(sentence)
+        annotations, machines = parser.parse_sentence(tokens)
+        amr = machines.get_amr()
+        penman_str = amr.to_penman(jamr=False, isi=True)
+        print(penman_str, flush=True)
+    except Exception as e:
+        print(f'ERROR: {e}', file=sys.stderr, flush=True)
+    print(DELIMITER, flush=True)
 ''')
-        print(f"    ✓ Helper script created: {helper_script}")
+        print(f"    ✓ Server script created: {helper_script}")
 
-        # Quick verify: check if venv Python can import the parser
-        import subprocess as sp
-        verify = sp.run(
-            [python_bin, '-c', 'from transition_amr_parser.parse import AMRParser; print("OK")'],
-            capture_output=True, text=True, cwd=en_amr_repo
-        )
-        if verify.returncode == 0 and 'OK' in verify.stdout:
-            print(f"    ✓ IBM AMR parser verified in venv")
-        else:
-            print(f"    [WARN] Could not verify IBM parser in venv:")
-            print(f"    {verify.stderr.strip()[:200]}")
-            print(f"    Parsing may fail at runtime.")
+        # Start persistent AMR server (loads model once)
+        print(f"    Starting AMR server (loading model, may take 1-2 min)...")
+        try:
+            en_amr_server = EnAMRServer(python_bin, helper_script + ' ' + en_amr_model, en_amr_repo)
+            # Actually need to pass model as arg properly
+            import subprocess as sp
+            en_amr_server = EnAMRServer.__new__(EnAMRServer)
+            en_amr_server.process = sp.Popen(
+                [python_bin, helper_script, en_amr_model],
+                stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE,
+                text=True, cwd=en_amr_repo, bufsize=1,
+            )
+            # Wait for READY (may take 1-2 min for model load)
+            ready_line = en_amr_server.process.stdout.readline().strip()
+            if ready_line != 'READY':
+                stderr_out = en_amr_server.process.stderr.read(500) if en_amr_server.process.stderr else ''
+                print(f"    [ERROR] AMR server failed. Got: {ready_line}")
+                print(f"    Stderr: {stderr_out}")
+                return
+            print(f"    ✓ AMR server ready!")
+        except Exception as e:
+            print(f"    [ERROR] Failed to start AMR server: {e}")
+            return
 
     # 3. Load SAFT Translation model
     print("\nLoading Translation Model...")
@@ -608,10 +662,9 @@ if __name__ == "__main__":
                 num_beams=amr_num_beams, use_cache=True
             )
         else:
-            print(f"\n[1] Parsing to AMR (IBM transition-amr-parser, subprocess)...")
+            print(f"\n[1] Parsing to AMR (IBM transition-amr-parser)...")
             penman_amr = parse_en_to_amr(
-                segmented_text, en_amr_venv, en_amr_model, en_amr_repo,
-                use_cache=True
+                segmented_text, en_amr_server, use_cache=True
             )
         print(f"    Raw AMR: {penman_amr}")
         print(f"    ⏱ {time.time() - t1:.2f}s" + (" (cached)" if cached else ""))
