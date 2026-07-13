@@ -608,13 +608,20 @@ for line in sys.stdin:
                 stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE,
                 text=True, cwd=en_amr_repo, bufsize=1,
             )
-            # Wait for READY (may take 1-2 min for model load)
-            ready_line = en_amr_server.process.stdout.readline().strip()
-            if ready_line != 'READY':
-                stderr_out = en_amr_server.process.stderr.read(500) if en_amr_server.process.stderr else ''
-                print(f"    [ERROR] AMR server failed. Got: {ready_line}")
-                print(f"    Stderr: {stderr_out}")
-                return
+            # Wait for READY — skip model loading/download progress lines
+            while True:
+                line = en_amr_server.process.stdout.readline()
+                if not line:  # EOF — process died
+                    stderr_out = en_amr_server.process.stderr.read(1000)
+                    print(f"    [ERROR] AMR server process died during startup.")
+                    print(f"    Stderr: {stderr_out[:500]}")
+                    return
+                line = line.strip()
+                if line == 'READY':
+                    break
+                # Print loading progress
+                if line:
+                    print(f"    [{line[:80]}]")
             print(f"    ✓ AMR server ready!")
         except Exception as e:
             print(f"    [ERROR] Failed to start AMR server: {e}")
