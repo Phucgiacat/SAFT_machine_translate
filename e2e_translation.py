@@ -252,13 +252,16 @@ class EnAMRServer:
 
     DELIMITER = '<<<AMR_END>>>'
 
-    def __init__(self, python_bin, helper_script, en_amr_repo):
+    def __init__(self, python_bin, helper_script, en_amr_repo, stderr_log=None):
         import subprocess
+        # Redirect stderr to log file to prevent pipe deadlock
+        # (model download progress bars fill up PIPE buffer → deadlock)
+        self._stderr_file = open(stderr_log, 'w') if stderr_log else None
         self.process = subprocess.Popen(
             [python_bin, helper_script],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=self._stderr_file or subprocess.DEVNULL,
             text=True,
             cwd=en_amr_repo,
             bufsize=1,  # line-buffered
@@ -266,8 +269,7 @@ class EnAMRServer:
         # Wait for "READY" signal from the server
         ready_line = self.process.stdout.readline().strip()
         if ready_line != 'READY':
-            stderr = self.process.stderr.read()
-            raise RuntimeError(f"AMR server failed to start. Got: {ready_line}\nStderr: {stderr}")
+            raise RuntimeError(f"AMR server failed to start. Got: {ready_line}")
 
     def parse(self, text):
         """Send a sentence and receive its AMR graph."""
@@ -280,8 +282,7 @@ class EnAMRServer:
         while True:
             line = self.process.stdout.readline()
             if not line:  # EOF — process died
-                stderr = self.process.stderr.read()
-                raise RuntimeError(f"AMR server died unexpectedly. Stderr: {stderr}")
+                raise RuntimeError("AMR server died unexpectedly. Check amr_server.log")
             line = line.rstrip('\n')
             if line == self.DELIMITER:
                 break
@@ -293,6 +294,8 @@ class EnAMRServer:
             self.process.stdin.write('__EXIT__\n')
             self.process.stdin.flush()
             self.process.wait(timeout=10)
+        if self._stderr_file:
+            self._stderr_file.close()
 
 
 def parse_en_to_amr(text, en_amr_server, use_cache=True):
@@ -600,31 +603,38 @@ for line in sys.stdin:
 
         # Start persistent AMR server (loads model once)
         print(f"    Starting AMR server (loading model, may take 1-2 min)...")
+        stderr_log = os.path.join(en_amr_repo, 'amr_server.log')
         try:
             import subprocess as sp
             en_amr_server = EnAMRServer.__new__(EnAMRServer)
+            en_amr_server._stderr_file = open(stderr_log, 'w')
             en_amr_server.process = sp.Popen(
                 [python_bin, helper_script, en_amr_model],
-                stdin=sp.PIPE, stdout=sp.PIPE, stderr=sp.PIPE,
+                stdin=sp.PIPE, stdout=sp.PIPE,
+                stderr=en_amr_server._stderr_file,  # log to file, NOT PIPE (prevents deadlock)
                 text=True, cwd=en_amr_repo, bufsize=1,
             )
             # Wait for READY — skip model loading/download progress lines
             while True:
                 line = en_amr_server.process.stdout.readline()
                 if not line:  # EOF — process died
-                    stderr_out = en_amr_server.process.stderr.read(1000)
+                    en_amr_server._stderr_file.close()
+                    with open(stderr_log, 'r') as f:
+                        stderr_out = f.read()[-500:]
                     print(f"    [ERROR] AMR server process died during startup.")
-                    print(f"    Stderr: {stderr_out[:500]}")
+                    print(f"    Stderr log: {stderr_log}")
+                    print(f"    Last 500 chars: {stderr_out}")
                     return
                 line = line.strip()
                 if line == 'READY':
                     break
                 # Print loading progress
                 if line:
-                    print(f"    [{line[:80]}]")
+                    print(f"    [{line[:100]}]")
             print(f"    ✓ AMR server ready!")
         except Exception as e:
             print(f"    [ERROR] Failed to start AMR server: {e}")
+            print(f"    Check stderr log: {stderr_log}")
             return
 
     # 3. Load SAFT Translation model
