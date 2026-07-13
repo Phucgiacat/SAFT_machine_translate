@@ -2,23 +2,30 @@
 End-to-End SAFT Translation Pipeline (Bidirectional)
 ═════════════════════════════════════════════════════════
 This script combines all the steps of the SAFT machine translation pipeline:
-1. Source Sentence -> AMR parsing (using AMRBART)
+1. Source Sentence -> AMR parsing
+   - Vietnamese source: AMRBART (phucgiacat/AMRBART-parser-grpo)
+   - English source:    IBM transition-amr-parser (AMR3-structbart-L)
 2. AMR Graph -> BFS Linearization
 3. Linearized AMR -> PE precomputation
 4. Sentence + PE -> Qwen Translation Model -> Target Translation
 
 Supports both directions:
-  - Vietnamese -> English (default):  --in vi --out en
-  - English -> Vietnamese:            --in en --out vi
+  - Vietnamese -> English (default):  --in vi --out en  (uses AMRBART)
+  - English -> Vietnamese:            --in en --out vi  (uses IBM transition-amr-parser)
 
 Usage:
-    # Vi -> En (default)
+    # Vi -> En (default, uses AMRBART)
     python e2e_translation.py --model-path <path> --brand qwen2.5 \
         --translate "Tôn_Ngộ_Không phá khóa bay vào"
 
-    # En -> Vi
+    # En -> Vi (uses IBM transition-amr-parser)
     python e2e_translation.py --model-path <path> --brand qwen2.5 \
         --in en --out vi --translate "The monkey king broke the lock and flew in"
+
+    # En -> Vi with custom IBM parser model
+    python e2e_translation.py --model-path <path> --brand qwen2.5 \
+        --in en --out vi --en-amr-model AMR3-structbart-L-smpl \
+        --translate "The monkey king broke the lock and flew in"
 
 Optimizations (--fast flag):
     - AMRBART loaded in float16 for faster AMR parsing
@@ -189,11 +196,11 @@ def _build_eval_prompt_with_pe(tokenizer, src_text, pe_info, max_length,
 # AMR Parsing
 # ─────────────────────────────────────────────────────────
 
-def parse_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True):
-    """Parse a sentence into a Penman AMR string using AMRBART.
+def parse_vi_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=True):
+    """Parse a Vietnamese sentence into a Penman AMR string using AMRBART.
 
     Args:
-        text: Input text (Vietnamese or English, depending on AMR parser)
+        text: Input Vietnamese text
         amr_model: AMRBART model
         amr_tokenizer: AMRBart tokenizer
         device: torch device
@@ -227,6 +234,38 @@ def parse_to_amr(text, amr_model, amr_tokenizer, device, num_beams=5, use_cache=
     graph.tokens = ith_pred
 
     result = penman.encode(graph).strip()
+
+    # Store in cache
+    if use_cache:
+        _amr_cache.put(text, result)
+
+    return result
+
+
+def parse_en_to_amr(text, en_amr_parser, use_cache=True):
+    """Parse an English sentence into a Penman AMR string using IBM transition-amr-parser.
+
+    Uses: AMRParser.from_pretrained('AMR3-structbart-L')
+    Repo: https://github.com/IBM/transition-amr-parser
+
+    Args:
+        text: Input English text
+        en_amr_parser: loaded AMRParser instance
+        use_cache: if True, cache results to avoid re-parsing identical sentences
+    """
+    global _amr_cache
+
+    # Check cache first
+    if use_cache and text in _amr_cache:
+        return _amr_cache.get(text)
+
+    # Tokenize and parse
+    tokens, positions = en_amr_parser.tokenize(text)
+    annotations, machines = en_amr_parser.parse_sentence(tokens)
+
+    # Get Penman notation from the AMR object
+    amr = machines.get_amr()
+    result = amr.to_penman(jamr=False, isi=True).strip()
 
     # Store in cache
     if use_cache:
@@ -288,8 +327,10 @@ def main():
     parser.add_argument('--model-path', required=True, help='Path to saved translation best_model')
     parser.add_argument('--brand', default='qwen2.5', help='Model brand preset (e.g., qwen2.5)')
     parser.add_argument('--base-model', type=str, default=None, help='Override base model name from config (e.g., Qwen/Qwen2.5-7B-Instruct)')
-    parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer')
-    parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMR parser checkpoint (default: phucgiacat/AMRBART-parser-grpo from HuggingFace)')
+    parser.add_argument('--amrbart-path', default='../AMRBART', help='Path to AMRBART repository for tokenizer (Vi->En)')
+    parser.add_argument('--amr-checkpoint', type=str, default=None, help='Path to custom AMRBART checkpoint (Vi->En, default: phucgiacat/AMRBART-parser-grpo)')
+    parser.add_argument('--en-amr-model', type=str, default='AMR3-structbart-L',
+                        help='IBM transition-amr-parser model name for English AMR parsing (En->Vi, default: AMR3-structbart-L)')
     parser.add_argument('--translate', type=str, default=None, help='Sentence to translate')
     parser.add_argument('--interactive', action='store_true', help='Start interactive mode')
     parser.add_argument('--fast', action='store_true', help='Enable inference optimizations (FP16 AMRBART, reduced beams, cache)')
@@ -336,113 +377,133 @@ def main():
         config.model_name = args.base_model
     set_chat_format(config.chat_format)
 
-    # 2. Load AMRBART parser
-    print("\nLoading AMRBART Parser...")
+    # 2. Load AMR parser (direction-specific)
+    amr_model = None
+    amr_tokenizer = None
+    en_amr_parser = None
+    amr_num_beams = 5
 
-    # Import AMRBartTokenizer from AMRBART repo
-    amrbart_repo = os.path.abspath(args.amrbart_path)
-    amrbart_finetune = os.path.join(amrbart_repo, "fine-tune")
+    if args.src_lang == 'vi':
+        # ── Vi→En: Load AMRBART for Vietnamese AMR parsing ──
+        print("\nLoading AMRBART Parser (Vietnamese)...")
 
-    if not os.path.exists(amrbart_repo) or not os.path.exists(amrbart_finetune):
-        print(f"Error: AMRBART fine-tune directory not found at {amrbart_finetune}")
-        print("Please clone https://github.com/goodbai-nlp/AMRBART.git and point --amrbart-path to it.")
-        return
+        amrbart_repo = os.path.abspath(args.amrbart_path)
+        amrbart_finetune = os.path.join(amrbart_repo, "fine-tune")
 
-    if amrbart_finetune not in sys.path:
-        sys.path.insert(0, amrbart_finetune)
+        if not os.path.exists(amrbart_repo) or not os.path.exists(amrbart_finetune):
+            print(f"Error: AMRBART fine-tune directory not found at {amrbart_finetune}")
+            print("Please clone https://github.com/goodbai-nlp/AMRBART.git and point --amrbart-path to it.")
+            return
 
-    # Monkey-patch transformers to bypass AdamW/Adafactor import errors in AMRBART's constant.py
-    import transformers
-    if not hasattr(transformers, 'AdamW'):
-        transformers.AdamW = None
-    if not hasattr(transformers, 'Adafactor'):
-        transformers.Adafactor = None
+        if amrbart_finetune not in sys.path:
+            sys.path.insert(0, amrbart_finetune)
 
-    try:
-        from model_interface.tokenization_bart import AMRBartTokenizer
+        # Monkey-patch transformers to bypass AdamW/Adafactor import errors in AMRBART's constant.py
+        import transformers
+        if not hasattr(transformers, 'AdamW'):
+            transformers.AdamW = None
+        if not hasattr(transformers, 'Adafactor'):
+            transformers.Adafactor = None
 
-        # Patch AMRBartTokenizer.__init__ to avoid "multiple values for argument 'vocab'" in Colab's transformers
-        def patched_init(self, *args, **kwargs):
-            from transformers import BartTokenizer
-            import regex as re
-            from common.constant import recategorizations
-
-            # Avoid multiple values error if both positional and kwarg are passed
-            if len(args) > 0:
-                kwargs.pop('vocab', None)
-                kwargs.pop('vocab_file', None)
-
-            BartTokenizer.__init__(self, *args, **kwargs)
-
-            # In some transformers versions, self.encoder is not set or replaced by self.vocab
-            if not hasattr(self, 'encoder'):
-                self.encoder = self.get_vocab().copy()
-            if not hasattr(self, 'decoder'):
-                self.decoder = {v: k for k, v in self.encoder.items()}
-
-            self.modified = 0
-            self.recategorizations = set(recategorizations)
-            self.patterns = re.compile(r""" ?<[a-z]+:?\d*>| ?:[^\s]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
-            self.remove_pars = False
-
-        AMRBartTokenizer.__init__ = patched_init
-
-        # Patch AMRBartTokenizer.init_amr_vocabulary to avoid "AttributeError: property 'decoder' has no setter"
-        def patched_init_amr_vocabulary(self):
-            from common.constant import raw_special_tokens
-            self.old_enc_size = old_enc_size = len(self.encoder)
-            tokens = [t for t in raw_special_tokens if t not in self.encoder]
-
-            for i, t in enumerate(tokens, start=old_enc_size):
-                self.encoder[t] = i
-
-            self.encoder = {k: i for i, (k,v) in enumerate(sorted(self.encoder.items(), key=lambda x: x[1]))}
-            my_decoder = {v: k for k, v in sorted(self.encoder.items(), key=lambda x: x[1])}
-
-            try:
-                self.decoder = my_decoder
-            except AttributeError:
-                # If decoder is a read-only property in this transformers version, override it on the class
-                self.__class__.decoder = property(lambda self: self._amr_decoder)
-                self._amr_decoder = my_decoder
-
-            self.modified = len(tokens)
-            self.amr_bos_token = "<AMR>"
-            self.amr_bos_token_id = self.encoder[self.amr_bos_token]
-            self.amr_eos_token = "</AMR>"
-            self.amr_eos_token_id = self.encoder[self.amr_eos_token]
-
-        AMRBartTokenizer.init_amr_vocabulary = patched_init_amr_vocabulary
-
-    except ImportError as e:
-        print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
-        return
-
-    amr_model_name = args.amr_checkpoint if args.amr_checkpoint else "phucgiacat/AMRBART-parser-grpo"
-    print(f"    Loading AMR model from: {amr_model_name}")
-    amr_tokenizer = AMRBartTokenizer.from_pretrained(amr_model_name)
-
-    # Load AMRBART — use float16 in fast mode for ~2x speedup
-    if args.fast and device == "cuda":
-        amr_model = BartForConditionalGeneration.from_pretrained(
-            amr_model_name, torch_dtype=torch.float16
-        ).to(device)
-        print("    ✓ AMRBART loaded in float16")
-    else:
-        amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
-    amr_model.eval()
-
-    # Optional: torch.compile for further speedup (slow first run, fast subsequent)
-    if args.compile:
         try:
-            amr_model = torch.compile(amr_model, mode="reduce-overhead")
-            print("    ✓ AMRBART compiled with torch.compile")
-        except Exception as e:
-            print(f"    [WARN] torch.compile failed: {e}")
+            from model_interface.tokenization_bart import AMRBartTokenizer
 
-    # Set AMR beam count — reduced in fast mode
-    amr_num_beams = 3 if args.fast else 5
-    print(f"    AMR beams: {amr_num_beams}")
+            # Patch AMRBartTokenizer.__init__ to avoid "multiple values for argument 'vocab'" in Colab's transformers
+            def patched_init(self, *args, **kwargs):
+                from transformers import BartTokenizer
+                import regex as re
+                from common.constant import recategorizations
+
+                if len(args) > 0:
+                    kwargs.pop('vocab', None)
+                    kwargs.pop('vocab_file', None)
+
+                BartTokenizer.__init__(self, *args, **kwargs)
+
+                if not hasattr(self, 'encoder'):
+                    self.encoder = self.get_vocab().copy()
+                if not hasattr(self, 'decoder'):
+                    self.decoder = {v: k for k, v in self.encoder.items()}
+
+                self.modified = 0
+                self.recategorizations = set(recategorizations)
+                self.patterns = re.compile(r""" ?<[a-z]+:?\d*>| ?:[^\s]+|'s|'t|'re|'ve|'m|'ll|'d| ?\p{L}+| ?\p{N}+| ?[^\s\p{L}\p{N}]+|\s+(?!\S)|\s+""")
+                self.remove_pars = False
+
+            AMRBartTokenizer.__init__ = patched_init
+
+            # Patch init_amr_vocabulary to avoid "property 'decoder' has no setter"
+            def patched_init_amr_vocabulary(self):
+                from common.constant import raw_special_tokens
+                self.old_enc_size = old_enc_size = len(self.encoder)
+                tokens = [t for t in raw_special_tokens if t not in self.encoder]
+
+                for i, t in enumerate(tokens, start=old_enc_size):
+                    self.encoder[t] = i
+
+                self.encoder = {k: i for i, (k,v) in enumerate(sorted(self.encoder.items(), key=lambda x: x[1]))}
+                my_decoder = {v: k for k, v in sorted(self.encoder.items(), key=lambda x: x[1])}
+
+                try:
+                    self.decoder = my_decoder
+                except AttributeError:
+                    self.__class__.decoder = property(lambda self: self._amr_decoder)
+                    self._amr_decoder = my_decoder
+
+                self.modified = len(tokens)
+                self.amr_bos_token = "<AMR>"
+                self.amr_bos_token_id = self.encoder[self.amr_bos_token]
+                self.amr_eos_token = "</AMR>"
+                self.amr_eos_token_id = self.encoder[self.amr_eos_token]
+
+            AMRBartTokenizer.init_amr_vocabulary = patched_init_amr_vocabulary
+
+        except ImportError as e:
+            print(f"Failed to import AMRBartTokenizer from {amrbart_finetune}: {e}")
+            return
+
+        amr_model_name = args.amr_checkpoint if args.amr_checkpoint else "phucgiacat/AMRBART-parser-grpo"
+        print(f"    Loading AMR model from: {amr_model_name}")
+        amr_tokenizer = AMRBartTokenizer.from_pretrained(amr_model_name)
+
+        # Load AMRBART — use float16 in fast mode for ~2x speedup
+        if args.fast and device == "cuda":
+            amr_model = BartForConditionalGeneration.from_pretrained(
+                amr_model_name, torch_dtype=torch.float16
+            ).to(device)
+            print("    ✓ AMRBART loaded in float16")
+        else:
+            amr_model = BartForConditionalGeneration.from_pretrained(amr_model_name).to(device)
+        amr_model.eval()
+
+        # Optional: torch.compile for further speedup
+        if args.compile:
+            try:
+                amr_model = torch.compile(amr_model, mode="reduce-overhead")
+                print("    ✓ AMRBART compiled with torch.compile")
+            except Exception as e:
+                print(f"    [WARN] torch.compile failed: {e}")
+
+        # Set AMR beam count — reduced in fast mode
+        amr_num_beams = 3 if args.fast else 5
+        print(f"    AMR beams: {amr_num_beams}")
+
+    else:
+        # ── En→Vi: Load IBM transition-amr-parser for English AMR parsing ──
+        print(f"\nLoading IBM transition-amr-parser (English)...")
+        print(f"    Model: {args.en_amr_model}")
+        try:
+            from transition_amr_parser.parse import AMRParser
+            en_amr_parser = AMRParser.from_pretrained(args.en_amr_model)
+            print(f"    ✓ IBM AMR parser loaded: {args.en_amr_model}")
+        except ImportError:
+            print("    [ERROR] transition-amr-parser not installed.")
+            print("    Install: pip install transition-amr-parser")
+            print("    Or clone: https://github.com/IBM/transition-amr-parser.git")
+            return
+        except Exception as e:
+            print(f"    [ERROR] Failed to load IBM AMR parser: {e}")
+            return
 
     # 3. Load SAFT Translation model
     print("\nLoading Translation Model...")
@@ -474,14 +535,20 @@ def main():
             print(f"    Text: {segmented_text}")
         print(f"    ⏱ {time.time() - t0:.2f}s")
 
-        # Step 1: Parse to AMR
+        # Step 1: Parse to AMR (direction-specific parser)
         t1 = time.time()
-        print(f"\n[1] Parsing to AMR...")
         cached = segmented_text in _amr_cache
-        penman_amr = parse_to_amr(
-            segmented_text, amr_model, amr_tokenizer, device,
-            num_beams=amr_num_beams, use_cache=True
-        )
+        if args.src_lang == 'vi':
+            print(f"\n[1] Parsing to AMR (AMRBART)...")
+            penman_amr = parse_vi_to_amr(
+                segmented_text, amr_model, amr_tokenizer, device,
+                num_beams=amr_num_beams, use_cache=True
+            )
+        else:
+            print(f"\n[1] Parsing to AMR (IBM transition-amr-parser)...")
+            penman_amr = parse_en_to_amr(
+                segmented_text, en_amr_parser, use_cache=True
+            )
         print(f"    Raw AMR: {penman_amr}")
         print(f"    ⏱ {time.time() - t1:.2f}s" + (" (cached)" if cached else ""))
 
