@@ -601,8 +601,6 @@ for line in sys.stdin:
         # Start persistent AMR server (loads model once)
         print(f"    Starting AMR server (loading model, may take 1-2 min)...")
         try:
-            en_amr_server = EnAMRServer(python_bin, helper_script + ' ' + en_amr_model, en_amr_repo)
-            # Actually need to pass model as arg properly
             import subprocess as sp
             en_amr_server = EnAMRServer.__new__(EnAMRServer)
             en_amr_server.process = sp.Popen(
