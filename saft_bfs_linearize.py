@@ -197,9 +197,9 @@ def main():
     args = parser.parse_args()
 
     splits = [
-        ('train-amr.txt', 'train.linear.amr'),
-        ('tst2012-amr.txt', 'tst2012.linear.amr'),
-        ('tst2013-amr.txt', 'tst2013.linear.amr'),
+        ('train-amr.txt', 'train.bpe.amr'),
+        ('tst2012-amr.txt', 'tst2012.bpe.amr'),
+        ('tst2013-amr.txt', 'tst2013.bpe.amr'),
     ]
 
     for penman_name, out_name in splits:

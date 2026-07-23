@@ -323,16 +323,15 @@ def evaluate_bleu(
                 predictions.append(pred)
 
         else:
-            # ── Baseline path: standard string-based generation ──
+            # ── Baseline path: standard text generation ──
             prompts = []
-            for j in range(batch_start, batch_end):
-                prompt = (
-                    f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
-                    f"<|im_start|>user\n"
-                    f"Translate the source text from Vietnamese to English.\n"
-                    f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
-                )
+            for i in range(batch_start, batch_end):
+                vi = vi_texts[i]
+                amr = amr_texts[i] if amr_texts else ""
+                sys_msg, user_msg, _ = build_baseline_prompt_parts(vi, amr)
+                
+                # Manual formatting (no PE logic)
+                prompt = f"<|im_start|>system\n{sys_msg}<|im_end|>\n<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
                 prompts.append(prompt)
 
             tokenizer.padding_side = "left"
@@ -684,13 +683,13 @@ def main():
 
     train_vi = read_lines(os.path.join(config.data_dir, "train.vi"))
     train_en = read_lines(os.path.join(config.data_dir, "train.en"))
-    train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
+    train_amr = read_lines(os.path.join(config.data_dir, "train.bpe.amr"))
     val_vi = read_lines(os.path.join(config.data_dir, "tst2012.vi"))
     val_en = read_lines(os.path.join(config.data_dir, "tst2012.en"))
-    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
+    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.bpe.amr"))
     test_vi = read_lines(os.path.join(config.data_dir, "tst2013.vi"))
     test_en = read_lines(os.path.join(config.data_dir, "tst2013.en"))
-    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
+    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.bpe.amr"))
     print(f"  Train: {len(train_vi):,} | Val: {len(val_vi):,} | Test: {len(test_vi):,}")
 
     # Load precomputed PEs (for SAFT track)
@@ -738,6 +737,7 @@ def main():
 
         train_ds = BaselineDataset(
             os.path.join(config.data_dir, "train.vi"),
+            os.path.join(config.data_dir, "train.bpe.amr"),
             os.path.join(config.data_dir, "train.en"),
             tokenizer, config.baseline_max_seq,
         )
@@ -802,7 +802,7 @@ def main():
         train_ds = SAFTDataset(
             os.path.join(config.data_dir, "train.vi"),
             os.path.join(config.data_dir, "train.en"),
-            os.path.join(config.data_dir, "train.linear.amr"),
+            os.path.join(config.data_dir, "train.bpe.amr"),
             os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer, config.saft_max_seq, config.k_eigenvectors,
             max_chunks=config.max_chunks,

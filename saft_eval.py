@@ -250,10 +250,11 @@ def generate_translations(model, tokenizer, vi_texts, amr_texts=None,
                          f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
                          f"<|im_start|>assistant\n")
                 else:
+                    amr = amr_texts[j] if amr_texts else ""
                     p = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                          f"<|im_start|>user\n"
-                         f"Translate the source text from Vietnamese to English.\n"
-                         f"Vietnamese: {vi_texts[j]}\nEnglish:<|im_end|>\n"
+                         f"Translate the source text from Vietnamese to English. Using AMR: {amr}\n"
+                         f"source: {vi_texts[j]}\nEnglish:<|im_end|>\n"
                          f"<|im_start|>assistant\n")
                 prompts.append(p)
 
@@ -292,10 +293,11 @@ def translate_single(model, tokenizer, vi_text, amr_text=None, mode="baseline",
                   f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
                   f"<|im_start|>assistant\n")
     else:
+        amr = amr_text if amr_text else ""
         prompt = (f"<|im_start|>system\n{SYSTEM_MSG_BASELINE}<|im_end|>\n"
                   f"<|im_start|>user\n"
-                  f"Translate the source text from Vietnamese to English.\n"
-                  f"Vietnamese: {vi_text}\nEnglish:<|im_end|>\n"
+                  f"Translate the source text from Vietnamese to English. Using AMR: {amr}\n"
+                  f"source: {vi_text}\nEnglish:<|im_end|>\n"
                   f"<|im_start|>assistant\n")
 
     is_saft_model = isinstance(model, SAFTModel)
@@ -437,7 +439,7 @@ def main():
     test_vi = read_lines(os.path.join(args.data_dir, f"{args.split}.vi"))
     test_en = read_lines(os.path.join(args.data_dir, f"{args.split}.en"))
     test_amr = None
-    amr_path = os.path.join(args.data_dir, f"{args.split}.linear.amr")
+    amr_path = os.path.join(args.data_dir, f"{args.split}.bpe.amr")
     if not os.path.exists(amr_path):
         # Fallback to old format
         amr_path = os.path.join(args.data_dir, f"{args.split}.bpe.amr")

@@ -97,9 +97,9 @@ def print_stats(name, estimates, max_seq, label_counts=None):
 
 def main():
     for split_name, vi_name, en_name, amr_name in [
-        ("TRAIN", "train.vi", "train.en", "train.linear.amr"),
-        ("VAL (tst2012)", "tst2012.vi", "tst2012.en", "tst2012.linear.amr"),
-        ("TEST (tst2013)", "tst2013.vi", "tst2013.en", "tst2013.linear.amr"),
+        ("TRAIN", "train.vi", "train.en", "train.bpe.amr"),
+        ("VAL (tst2012)", "tst2012.vi", "tst2012.en", "tst2012.bpe.amr"),
+        ("TEST (tst2013)", "tst2013.vi", "tst2013.en", "tst2013.bpe.amr"),
     ]:
         vi_path = os.path.join(DATA_DIR, vi_name)
         en_path = os.path.join(DATA_DIR, en_name)

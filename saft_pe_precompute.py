@@ -2,7 +2,7 @@
 SAFT PE Precomputation (BFS Linearization)
 ═════════════════════════════════════════════════════════
 Precompute node-level Magnetic Laplacian PEs for all AMR graphs.
-Uses BFS-linearized AMR (*.linear.amr) and builds SPG from
+Uses BFS-linearized AMR (*.bpe.amr) and builds SPG from
 the linearization directly (following SAFT paper Section 3.1/B.1).
 
 Key difference from old version:
@@ -172,11 +172,11 @@ def main():
     args = parser.parse_args()
 
     splits = [
-        ('tst2012.linear.amr', 'tst2012_pes.pkl'),
-        ('tst2013.linear.amr', 'tst2013_pes.pkl'),
+        ('tst2012.bpe.amr', 'tst2012_pes.pkl'),
+        ('tst2013.bpe.amr', 'tst2013_pes.pkl'),
     ]
     if not args.test_only:
-        splits.insert(0, ('train.linear.amr', 'train_pes.pkl'))
+        splits.insert(0, ('train.bpe.amr', 'train_pes.pkl'))
 
     for linear_name, out_name in splits:
         linear_path = os.path.join(args.data_dir, linear_name)

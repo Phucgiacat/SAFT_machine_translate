@@ -40,9 +40,9 @@ def build_saft_prompt_parts(vi_text: str, amr_text: str, en_text: str = None):
     return SYSTEM_MSG_SAFT, user_before, amr_text, user_after, en_text
 
 
-def build_baseline_prompt_parts(vi_text: str, en_text: str = None):
+def build_baseline_prompt_parts(vi_text: str, amr_text: str, en_text: str = None):
     """Build prompt parts for Baseline mode. Returns (system, user_content, assistant)."""
-    user_content = f"Translate the source text from Vietnamese to English.\nVietnamese: {vi_text}\nEnglish:"
+    user_content = f"Translate the source text from Vietnamese to English. Using AMR: {amr_text}\nsource: {vi_text}\nEnglish:"
     return SYSTEM_MSG_BASELINE, user_content, en_text
 
 
@@ -186,47 +186,24 @@ def tokenize_with_amr_alignment(
 def tokenize_baseline(
     tokenizer,
     vi_text: str,
+    amr_text: str,
     en_text: str,
     max_seq_length: int = 1280,
 ) -> Dict:
-    """Tokenize baseline prompt (no AMR, no PE)."""
-    system, user_content, assistant = build_baseline_prompt_parts(vi_text, en_text)
+    """Tokenize baseline prompt with AMR text prompt (no PE)."""
+    system, user_content, assistant = build_baseline_prompt_parts(vi_text, amr_text, en_text)
 
-    # Tokenize in parts for smart truncation (avoid cutting structural tokens)
-    struct_prefix = (
-        f"<|im_start|>system\n{system}<|im_end|>\n"
-        f"<|im_start|>user\n"
-        f"Translate the source text from Vietnamese to English.\n"
-        f"Vietnamese: "
-    )
-    struct_suffix = f"\nEnglish:<|im_end|>\n<|im_start|>assistant\n"
-
+    struct_prefix = f"<|im_start|>system\n{system}<|im_end|>\n<|im_start|>user\n{user_content}<|im_end|>\n<|im_start|>assistant\n"
     prefix_ids = tokenizer.encode(struct_prefix, add_special_tokens=False)
-    vi_ids = tokenizer.encode(vi_text, add_special_tokens=False)
-    suffix_ids = tokenizer.encode(struct_suffix, add_special_tokens=False)
     response_ids = tokenizer.encode(f"{en_text}<|im_end|>", add_special_tokens=False)
 
-    fixed_overhead = len(prefix_ids) + len(suffix_ids)
-    budget = max_seq_length - fixed_overhead
-
-    if len(vi_ids) + len(response_ids) > budget:
-        if len(response_ids) <= budget - 10:
-            # Keep full response, truncate Vietnamese
-            vi_ids = vi_ids[:budget - len(response_ids)]
-        else:
-            # Both need cutting: prioritize response (70%)
-            resp_budget = max(budget * 7 // 10, min(20, budget))
-            vi_ids = vi_ids[:budget - resp_budget]
-            response_ids = response_ids[:resp_budget]
-
-    prompt_ids = prefix_ids + vi_ids + suffix_ids
-    all_ids = prompt_ids + response_ids
+    all_ids = prefix_ids + response_ids
     if len(all_ids) > max_seq_length:
         all_ids = all_ids[:max_seq_length]
 
     seq_len = len(all_ids)
     labels = [-100] * seq_len
-    for j in range(len(prompt_ids), seq_len):
+    for j in range(len(prefix_ids), seq_len):
         labels[j] = all_ids[j]
 
     return {
@@ -437,11 +414,12 @@ class SAFTDataset(Dataset):
 
 
 class BaselineDataset(Dataset):
-    """Dataset for Baseline training (no AMR)."""
+    """Dataset for Baseline training (with AMR text)."""
 
     def __init__(
         self,
         vi_file: str,
+        amr_file: str,
         en_file: str,
         tokenizer,
         max_seq_length: int = 768,
@@ -451,11 +429,14 @@ class BaselineDataset(Dataset):
 
         with open(vi_file, 'r', encoding='utf-8') as f:
             self.vi_texts = [l.strip() for l in f]
+        with open(amr_file, 'r', encoding='utf-8') as f:
+            self.amr_texts = [l.strip() for l in f]
         with open(en_file, 'r', encoding='utf-8') as f:
             self.en_texts = [l.strip() for l in f]
 
-        n = min(len(self.vi_texts), len(self.en_texts))
+        n = min(len(self.vi_texts), len(self.amr_texts), len(self.en_texts))
         self.vi_texts = self.vi_texts[:n]
+        self.amr_texts = self.amr_texts[:n]
         self.en_texts = self.en_texts[:n]
 
         print(f"  BaselineDataset: {n} samples")
@@ -465,7 +446,7 @@ class BaselineDataset(Dataset):
 
     def __getitem__(self, idx):
         result = tokenize_baseline(
-            self.tokenizer, self.vi_texts[idx], self.en_texts[idx],
+            self.tokenizer, self.vi_texts[idx], self.amr_texts[idx], self.en_texts[idx],
             self.max_seq_length,
         )
         return [result]

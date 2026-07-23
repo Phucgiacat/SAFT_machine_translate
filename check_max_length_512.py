@@ -201,9 +201,9 @@ def analyze(split_name, vi_path, en_path, amr_path):
 
 def main():
     for name, vi, en, amr in [
-        ("TRAIN", "train.vi", "train.en", "train.linear.amr"),
-        ("VAL", "tst2012.vi", "tst2012.en", "tst2012.linear.amr"),
-        ("TEST", "tst2013.vi", "tst2013.en", "tst2013.linear.amr"),
+        ("TRAIN", "train.vi", "train.en", "train.bpe.amr"),
+        ("VAL", "tst2012.vi", "tst2012.en", "tst2012.bpe.amr"),
+        ("TEST", "tst2013.vi", "tst2013.en", "tst2013.bpe.amr"),
     ]:
         vi_p = os.path.join(DATA_DIR, vi)
         en_p = os.path.join(DATA_DIR, en)
