@@ -438,8 +438,17 @@ class BaselineDataset(Dataset):
         self.vi_texts = self.vi_texts[:n]
         self.amr_texts = self.amr_texts[:n]
         self.en_texts = self.en_texts[:n]
-
         print(f"  BaselineDataset: {n} samples")
+        
+        # Print a sample prompt for debugging
+        if n > 0:
+            sys_msg, user_msg, _ = build_baseline_prompt_parts(self.vi_texts[0], self.amr_texts[0])
+            sample_prompt = f"<|im_start|>system\n{sys_msg}<|im_end|>\n<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n{self.en_texts[0]}<|im_end|>"
+            print("\n" + "═" * 60)
+            print("  SAMPLE PROMPT FORMAT (BaselineDataset):")
+            print("═" * 60)
+            print(sample_prompt)
+            print("═" * 60 + "\n")
 
     def __len__(self):
         return len(self.vi_texts)
