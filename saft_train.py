@@ -53,6 +53,7 @@ from saft_dataset import (
     SAFTDataset, BaselineDataset,
     saft_collate_fn, baseline_collate_fn,
     SYSTEM_MSG_SAFT, SYSTEM_MSG_BASELINE,
+    build_baseline_prompt_parts,
 )
 from saft_config import get_config, BRAND_CONFIGS
 
