@@ -537,27 +537,10 @@ def extract_structural_features(penman_str: str,
 #    Each label → 1 node in SPG (bijective alignment)
 # ─────────────────────────────────────────────────────────
 
-def build_spg_from_bfs_linear(linear_str: str) -> Optional[nx.DiGraph]:
+def build_spg_from_dfs_linear(linear_str: str) -> Optional[nx.DiGraph]:
     """
-    Construct a Semantically-Preserving Graph (SPG) from a BFS-linearized
-    AMR string, following the SAFT paper Section B.1.
-
-    Pipeline:
-      1. ToSubgraph: Split at <stop> → local subgraphs
-      2. RoleExpand: edge labels → role nodes (u → role_node → v)
-      3. AddStopNodes: <stop> nodes inserted
-      4. Merge: <P> co-referring nodes unified
-
-    Key property: |V_SPG| = L (number of labels in linearization).
-    Each label gets exactly one node → bijective PE alignment.
-
-    Args:
-        linear_str: BFS linearized AMR (single line)
-                    e.g. "want-01 :arg0 child <P1> :arg1 believe-01 <stop> child <stop> ..."
-
-    Returns:
-        SPG as nx.DiGraph with node attribute 'label' containing the original label text.
-        Returns None if parsing fails.
+    Construct a Semantically-Preserving Graph (SPG) from a DFS-linearized
+    AMR string. Each label gets exactly one node -> bijective PE alignment.
     """
     if not linear_str or not linear_str.strip():
         return None
@@ -566,118 +549,56 @@ def build_spg_from_bfs_linear(linear_str: str) -> Optional[nx.DiGraph]:
     if len(labels) == 0:
         return None
 
+    import networkx as nx
     SPG = nx.DiGraph()
-    n_labels = len(labels)
 
-    # Add one node per label (bijective: node i ↔ label i)
     for i, label in enumerate(labels):
         SPG.add_node(i, label=label, node_type=_classify_label(label))
 
-    # Parse segments (split at <stop>)
-    # Each segment: [concept, :role1, target1, :role2, target2, ..., <stop>]
-    segments = []
-    current_segment = []
+    stack = []
+    scope_parent_idx = None
+    current_role_idx = None
+
     for i, label in enumerate(labels):
-        current_segment.append(i)  # store label index
-        if label == '<stop>':
-            segments.append(current_segment)
-            current_segment = []
-    if current_segment:
-        segments.append(current_segment)
-
-    # Track pointer → node indices for merging
-    pointer_to_indices = {}  # '<P1>' → [list of label indices]
-    for i, label in enumerate(labels):
-        if label.startswith('<P') and label.endswith('>') and label != '<stop>':
-            if label not in pointer_to_indices:
-                pointer_to_indices[label] = []
-            pointer_to_indices[label].append(i)
-
-    # Build edges within each segment
-    for seg_indices in segments:
-        if len(seg_indices) < 1:
-            continue
-
-        seg_labels = [(idx, labels[idx]) for idx in seg_indices]
-
-        # First non-stop label = head concept
-        head_idx = seg_indices[0]
-        head_label = labels[head_idx]
-
-        if head_label == '<stop>':
-            continue
-
-        # Parse: head_concept :role1 target1 :role2 target2 ... <stop>
-        pos = 1
-        while pos < len(seg_indices):
-            curr_idx = seg_indices[pos]
-            curr_label = labels[curr_idx]
-
-            if curr_label == '<stop>':
-                # Edge from head to <stop> node
-                SPG.add_edge(head_idx, curr_idx)
-                break
-
-            if curr_label.startswith(':'):
-                # This is a role label — next token is the target
-                role_idx = curr_idx
-                if pos + 1 < len(seg_indices):
-                    target_idx = seg_indices[pos + 1]
-                    target_label = labels[target_idx]
-
-                    if target_label == '<stop>':
-                        # Role without target (shouldn't happen normally)
-                        SPG.add_edge(head_idx, role_idx)
-                        SPG.add_edge(head_idx, target_idx)
-                        break
-
-                    # RoleExpand: head → role_node → target
-                    SPG.add_edge(head_idx, role_idx)
-                    SPG.add_edge(role_idx, target_idx)
-
-                    # If target is a pointer, skip extra token
-                    # Check if next-next is also a pointer (concept + pointer pair)
-                    if pos + 2 < len(seg_indices):
-                        next_next_label = labels[seg_indices[pos + 2]]
-                        if next_next_label.startswith('<P') and next_next_label.endswith('>') and next_next_label != '<stop>':
-                            # concept followed by pointer: "child <P1>"
-                            # The role points to concept, pointer is additional node
-                            pointer_idx = seg_indices[pos + 2]
-                            SPG.add_edge(target_idx, pointer_idx)
-                            pos += 3
-                            continue
-
-                    pos += 2
-                else:
-                    # Dangling role at end
-                    SPG.add_edge(head_idx, role_idx)
-                    pos += 1
+        if label == '(':
+            if scope_parent_idx is not None:
+                SPG.add_edge(scope_parent_idx, i)
+            stack.append((scope_parent_idx, current_role_idx))
+            scope_parent_idx = None
+            current_role_idx = None
+        elif label == ')':
+            if stack:
+                scope_parent_idx, current_role_idx = stack.pop()
+                if scope_parent_idx is not None:
+                    SPG.add_edge(scope_parent_idx, i)
+                current_role_idx = None
+        elif label.startswith(':'):
+            current_role_idx = i
+            if scope_parent_idx is not None:
+                SPG.add_edge(scope_parent_idx, i)
+        else:
+            # concept
+            if scope_parent_idx is None:
+                scope_parent_idx = i
+                if stack:
+                    outer_parent, outer_role = stack[-1]
+                    if outer_role is not None:
+                        SPG.add_edge(outer_role, i)
+                    elif outer_parent is not None:
+                        SPG.add_edge(outer_parent, i)
             else:
-                # Non-role, non-stop label after concept — could be pointer
-                pos += 1
-
-    # Merge: unify co-referring pointer nodes
-    # For each <P>, merge connectivity of all nodes sharing that pointer
-    for pointer, indices in pointer_to_indices.items():
-        if len(indices) < 2:
-            continue
-
-        # First occurrence defines the concept, others are references
-        primary_idx = indices[0]
-
-        for ref_idx in indices[1:]:
-            # Copy incoming edges of ref to primary
-            for pred in list(SPG.predecessors(ref_idx)):
-                if pred != primary_idx:
-                    SPG.add_edge(pred, primary_idx)
-
-            # Copy outgoing edges of primary to ref (so ref also "knows" structure)
-            for succ in list(SPG.successors(primary_idx)):
-                if succ != ref_idx:
-                    SPG.add_edge(ref_idx, succ)
+                if current_role_idx is not None:
+                    SPG.add_edge(current_role_idx, i)
+                    current_role_idx = None
+                else:
+                    SPG.add_edge(scope_parent_idx, i)
 
     return SPG
 
+
+# ─────────────────────────────────────────────────────────
+# Helpers
+# ─────────────────────────────────────────────────────────
 
 def _classify_label(label: str) -> str:
     """Classify a BFS label into its type."""

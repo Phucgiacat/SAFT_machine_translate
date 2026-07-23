@@ -1,8 +1,8 @@
 """
-SAFT PE Precomputation (BFS Linearization)
+SAFT PE Precomputation (DFS Linearization)
 ═════════════════════════════════════════════════════════
 Precompute node-level Magnetic Laplacian PEs for all AMR graphs.
-Uses BFS-linearized AMR (*.linear.amr) and builds SPG from
+Uses DFS-linearized AMR (*.bpe.amr) and builds SPG from
 the linearization directly (following SAFT paper Section 3.1/B.1).
 
 Key difference from old version:
@@ -28,14 +28,14 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from amr_graph_parser import (
-    build_spg_from_bfs_linear,
+    build_spg_from_dfs_linear,
     compute_magnetic_laplacian,
     extract_spectral_features,
 )
 
 
 # ─────────────────────────────────────────────────────────
-# 1. Compute PEs from BFS Linearization (Paper-compliant)
+# 1. Compute PEs from DFS Linearization (Paper-compliant)
 # ─────────────────────────────────────────────────────────
 
 def compute_pes_from_linear(
@@ -66,7 +66,7 @@ def compute_pes_from_linear(
         return None
 
     # Step 1: Build SPG from BFS linearization
-    SPG = build_spg_from_bfs_linear(linear_amr)
+    SPG = build_spg_from_dfs_linear(linear_amr)
     if SPG is None or len(SPG.nodes) == 0:
         return None
 
@@ -106,12 +106,12 @@ def precompute_pes(
 ):
     """Precompute PEs for all samples in a split."""
     print(f"\n{'='*60}")
-    print(f"  Precomputing PEs (BFS): {os.path.basename(linear_file)}")
+    print(f"  Precomputing PEs (DFS): {os.path.basename(linear_file)}")
     print(f"  k={k}, q={q}")
     print(f"{'='*60}")
 
-    # Read BFS-linearized AMR
-    print("Reading BFS-linearized AMR file...")
+    # Read DFS-linearized AMR
+    print("Reading DFS-linearized AMR file...")
     with open(linear_file, 'r', encoding='utf-8') as f:
         linear_lines = [line.strip() for line in f]
     print(f"  {len(linear_lines)} entries")
@@ -164,7 +164,7 @@ def precompute_pes(
 # ─────────────────────────────────────────────────────────
 
 def main():
-    parser = argparse.ArgumentParser(description='Precompute SAFT PEs (BFS)')
+    parser = argparse.ArgumentParser(description='Precompute SAFT PEs (DFS)')
     parser.add_argument('--data-dir', default='data', help='Data directory')
     parser.add_argument('--k', type=int, default=20, help='Number of eigenvectors')
     parser.add_argument('--q', type=float, default=0.25, help='Magnetic parameter')
@@ -172,11 +172,11 @@ def main():
     args = parser.parse_args()
 
     splits = [
-        ('tst2012.linear.amr', 'tst2012_pes.pkl'),
-        ('tst2013.linear.amr', 'tst2013_pes.pkl'),
+        ('tst2012.bpe.amr', 'tst2012_pes.pkl'),
+        ('tst2013.bpe.amr', 'tst2013_pes.pkl'),
     ]
     if not args.test_only:
-        splits.insert(0, ('train.linear.amr', 'train_pes.pkl'))
+        splits.insert(0, ('train.bpe.amr', 'train_pes.pkl'))
 
     for linear_name, out_name in splits:
         linear_path = os.path.join(args.data_dir, linear_name)
@@ -184,7 +184,7 @@ def main():
 
         if not os.path.exists(linear_path):
             print(f"[SKIP] Missing: {linear_path}")
-            print(f"  Run: python saft_bfs_linearize.py --data-dir {args.data_dir}")
+            print(f"  Run: python N/A (already provided) --data-dir {args.data_dir}")
             continue
 
         precompute_pes(linear_path, out_path, k=args.k, q=args.q)

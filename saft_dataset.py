@@ -2,7 +2,7 @@
 SAFT Dataset — Node-to-Token Alignment (BFS Linearization)
 ═════════════════════════════════════════════════════════
 Custom PyTorch Dataset that:
-1. Loads precomputed node-level PEs from BFS-linearized AMR
+1. Loads precomputed node-level PEs from DFS-linearized AMR
 2. Builds prompts with AMR + Vietnamese + English
 3. Aligns AMR labels to token positions (bijective: label i ↔ node i)
 4. Returns per-token PE vectors for embedding injection
@@ -247,14 +247,14 @@ def chunk_amr_at_stop_boundaries(
     max_chunks: int = 3,
 ) -> List[Tuple[List[str], np.ndarray]]:
     """
-    Split AMR labels into chunks at <stop> boundaries (BFS segment boundaries).
-    Preserves complete BFS segments within each chunk — no information loss.
+    Split AMR labels into chunks at <stop> boundaries (DFS segment boundaries).
+    Preserves complete DFS segments within each chunk — no information loss.
 
-    Each BFS segment ends with <stop>, representing one node's expansion.
+    Each DFS segment ends with <stop>, representing one node's expansion.
     Segments are greedily grouped to fit within max_labels_per_chunk.
 
     Args:
-        labels: BFS-linearized AMR labels
+        labels: DFS-linearized AMR labels
         label_pes: Per-label PE vectors (n_labels, pe_dim)
         max_labels_per_chunk: Max labels per chunk (estimated from token budget)
         max_chunks: Cap on number of chunks (excess merges into last chunk)
@@ -265,10 +265,10 @@ def chunk_amr_at_stop_boundaries(
     if len(labels) <= max_labels_per_chunk:
         return [(labels, label_pes)]
 
-    # Find segment boundaries (position after each <stop>)
+    # Find segment boundaries (position after each closing bracket)
     boundaries = [0]
     for i, label in enumerate(labels):
-        if label == '<stop>':
+        if label == ')':
             boundaries.append(i + 1)
     if boundaries[-1] < len(labels):
         boundaries.append(len(labels))
@@ -316,7 +316,7 @@ def chunk_amr_at_stop_boundaries(
 class SAFTDataset(Dataset):
     """
     Dataset for SAFT training with AMR PE injection.
-    Uses BFS-linearized AMR with bijective PE alignment.
+    Uses DFS-linearized AMR with bijective PE alignment.
 
     Supports chunking: when AMR is too long to fit in max_seq_length,
     it is split at <stop> boundaries into multiple training samples.
@@ -374,7 +374,7 @@ class SAFTDataset(Dataset):
         )
         self._fixed_overhead = len(tokenizer.encode(overhead_text, add_special_tokens=False))
 
-        print(f"  SAFTDataset (BFS): {n} samples, pe_dim={self.pe_dim}, max_chunks={max_chunks}")
+        print(f"  SAFTDataset (DFS): {n} samples, pe_dim={self.pe_dim}, max_chunks={max_chunks}")
 
     def __len__(self):
         return len(self.vi_texts)
