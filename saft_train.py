@@ -684,13 +684,13 @@ def main():
 
     train_vi = read_lines(os.path.join(config.data_dir, "train.vi"))
     train_en = read_lines(os.path.join(config.data_dir, "train.en"))
-    train_amr = read_lines(os.path.join(config.data_dir, "train.linear.amr"))
+    train_amr = read_lines(os.path.join(config.data_dir, "train.bpe.amr"))
     val_vi = read_lines(os.path.join(config.data_dir, "tst2012.vi"))
     val_en = read_lines(os.path.join(config.data_dir, "tst2012.en"))
-    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.linear.amr"))
+    val_amr = read_lines(os.path.join(config.data_dir, "tst2012.bpe.amr"))
     test_vi = read_lines(os.path.join(config.data_dir, "tst2013.vi"))
     test_en = read_lines(os.path.join(config.data_dir, "tst2013.en"))
-    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.linear.amr"))
+    test_amr = read_lines(os.path.join(config.data_dir, "tst2013.bpe.amr"))
     print(f"  Train: {len(train_vi):,} | Val: {len(val_vi):,} | Test: {len(test_vi):,}")
 
     # Load precomputed PEs (for SAFT track)
@@ -802,7 +802,7 @@ def main():
         train_ds = SAFTDataset(
             os.path.join(config.data_dir, "train.vi"),
             os.path.join(config.data_dir, "train.en"),
-            os.path.join(config.data_dir, "train.linear.amr"),
+            os.path.join(config.data_dir, "train.bpe.amr"),
             os.path.join(config.data_dir, "train_pes.pkl"),
             tokenizer, config.saft_max_seq, config.k_eigenvectors,
             max_chunks=config.max_chunks,
